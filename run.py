@@ -784,7 +784,6 @@ def _execute_oracle_campaign_run(config: dict, args) -> None:
 
 def main() -> None:
     load_dotenv()
-    configure_logging()
     ap = argparse.ArgumentParser(description="Agent Economy")
     ap.add_argument("--config", default=DEFAULT_CONFIG,
                     help="world config (default: evolving live-agent desktop profile)")
@@ -855,6 +854,24 @@ def main() -> None:
         ap.error("--oracle-campaign-run is a finalized headless evidence command")
     if args.oracle_campaign_run and (args.fork or args.replay):
         ap.error("--oracle-campaign-run cannot use fork or replay inputs")
+    # This command is a read-only persisted-evidence boundary.  Dispatch it
+    # before logging setup so the default invocation produces no log or SQLite
+    # sidecar artifacts; explicit --output remains its only filesystem output.
+    if args.supply_recovery_report:
+        from reports.supply_recovery import (
+            resolve_supply_recovery_db,
+            write_supply_recovery_receipt,
+        )
+        receipt = write_supply_recovery_receipt(
+            resolve_supply_recovery_db(args.supply_recovery_report),
+            output=args.output,
+        )
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        if not receipt["passed"]:
+            raise SystemExit(5)
+        return
+
+    configure_logging()
     mode = ("dataset_refresh" if args.refresh_datasets else
             "dataset_verify" if args.verify_datasets else
             "counterfactual" if args.counterfactual else
@@ -934,20 +951,6 @@ def main() -> None:
             phenomena_yaml=args.phenomena_evidence,
         )
         print(json.dumps(receipt, indent=2))
-        if not receipt["passed"]:
-            raise SystemExit(5)
-        return
-
-    if args.supply_recovery_report:
-        from reports.supply_recovery import (
-            resolve_supply_recovery_db,
-            write_supply_recovery_receipt,
-        )
-        receipt = write_supply_recovery_receipt(
-            resolve_supply_recovery_db(args.supply_recovery_report),
-            output=args.output,
-        )
-        print(json.dumps(receipt, indent=2, sort_keys=True))
         if not receipt["passed"]:
             raise SystemExit(5)
         return
