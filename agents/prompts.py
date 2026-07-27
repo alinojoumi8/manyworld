@@ -194,9 +194,11 @@ class ContextBuilder:
                 ctx["my_firm"] = self._firm_view(
                     firm, tick, recovery_settings_at_tick=recovery)
                 ctx["firm_applications"] = self._firm_applications(
-                    int(firm["id"]), include_posted_wage=recovery is not None)
+                    int(firm["id"]), include_posted_wage=recovery is not None,
+                    actionable_only=recovery is not None)
                 if self.engine_semantics_version >= 6:
-                    ctx["firm_job_offers"] = self._firm_job_offers(int(firm["id"]))
+                    ctx["firm_job_offers"] = self._firm_job_offers(
+                        int(firm["id"]), actionable_only=recovery is not None)
                 ctx["purpose"] = "founder"
                 if self.engine_semantics_version >= 7:
                     startup_work = self._startup_work(agent_row, tick, firm=firm)
@@ -1234,7 +1236,9 @@ class ContextBuilder:
         return view
 
     def _firm_applications(self, firm_id: int, *,
-                           include_posted_wage: bool = False) -> list[dict]:
+                           include_posted_wage: bool = False,
+                           actionable_only: bool = False) -> list[dict]:
+        open_job_clause = " AND j.status='open'" if actionable_only else ""
         if self.engine_semantics_version >= 6:
             rows = self.store.query(
                 "SELECT ap.id AS application_id,ap.agent_id,ap.job_id,ap.state,"
@@ -1243,7 +1247,7 @@ class ContextBuilder:
                 "FROM applications ap JOIN jobs j ON j.id=ap.job_id "
                 "JOIN agents a ON a.id=ap.agent_id "
                 "LEFT JOIN job_offers jo ON jo.application_id=ap.id AND jo.status='pending' "
-                "WHERE j.firm_id=? AND j.status='open' "
+                "WHERE j.firm_id=?" + open_job_clause + " "
                 "AND ap.state IN ('pending','negotiating') ORDER BY ap.id",
                 (firm_id,))
             return [{
@@ -1264,7 +1268,7 @@ class ContextBuilder:
                 "a.occupation AS occupation, a.age AS age,j.wage_cents AS posted_wage "
                 "FROM applications ap JOIN jobs j ON j.id=ap.job_id "
                 "JOIN agents a ON a.id=ap.agent_id "
-                "WHERE j.firm_id=? AND j.status='open' "
+                "WHERE j.firm_id=?" + open_job_clause + " "
                 "AND ap.state='pending' ORDER BY ap.id",
                 (firm_id,))
             return [{"application_id": int(r["application_id"]),
@@ -1276,7 +1280,7 @@ class ContextBuilder:
             "SELECT ap.id AS application_id, ap.agent_id AS agent_id, ap.job_id AS job_id, "
             "a.occupation AS occupation, a.age AS age FROM applications ap "
             "JOIN jobs j ON j.id=ap.job_id JOIN agents a ON a.id=ap.agent_id "
-            "WHERE j.firm_id=? AND j.status='open' "
+            "WHERE j.firm_id=?" + open_job_clause + " "
             "AND ap.state='pending' ORDER BY ap.id",
             (firm_id,))
         return [{"application_id": int(r["application_id"]),
@@ -1284,13 +1288,15 @@ class ContextBuilder:
                  "occupation": r["occupation"], "age": int(r["age"])}
                 for r in rows]
 
-    def _firm_job_offers(self, firm_id: int) -> list[dict]:
+    def _firm_job_offers(self, firm_id: int, *,
+                         actionable_only: bool = False) -> list[dict]:
+        open_job_clause = " AND j.status='open'" if actionable_only else ""
         rows = self.store.query(
             "SELECT jo.id AS offer_id,jo.application_id,jo.proposer_agent_id,"
             "jo.wage_cents,ap.agent_id,ap.job_id,j.title,j.wage_cents AS posted_wage "
             "FROM job_offers jo JOIN applications ap ON ap.id=jo.application_id "
             "JOIN jobs j ON j.id=ap.job_id WHERE j.firm_id=? "
-            "AND j.status='open' AND jo.status='pending' AND ap.state='negotiating' "
+            + open_job_clause + " AND jo.status='pending' AND ap.state='negotiating' "
             "AND jo.proposer_agent_id=ap.agent_id ORDER BY jo.id", (firm_id,))
         return [{
             "offer_id": int(row["offer_id"]),
