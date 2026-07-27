@@ -66,19 +66,27 @@ supply_recovery:
   enabled: true
   policy_version: supply-recovery-v1
   activation_tick: 0
+  wage_floor_cents: 15000
   gross_margin_coverage_bps: 12500
   cash_payroll_coverage_periods: 2
   max_hires_per_firm_per_period: 1
   demand_buffer_ticks: 5
+  sales_observation_ticks: 30
 checkpoint_every: 100
 checkpoint_keep_last: 2
 ```
 
 For each goods-producing firm, the module derives a safe wage ceiling from
 the actual unit margin, output per worker, pay interval, and required margin
-coverage. The profile is invalid when its configured wage floor exceeds that
-ceiling. It also computes the maximum workforce that can be carried with the
-configured cash reserve. A founder may post, offer, or accept only jobs within
+coverage. A configured wage floor is structurally valid on its own; its
+feasibility is evaluated against each firm's actual ceiling. The assessment
+reserves every incumbent and proposed worker for every configured payroll
+coverage period, and it permits no new job when observed sale quantity is zero.
+Sale quantity is converted to a workforce requirement over the explicitly
+configured observation window; the demand buffer is capped at one quarter of
+that window so it cannot turn a small number of sales into a new job.
+Unknown profile keys fail closed, while the version and activation-tick metadata
+are explicitly validated. A founder may post, offer, or accept only jobs within
 both limits. The calculation is recorded in a recovery event so acceptance
 reports can show why a job was or was not created.
 

@@ -13,7 +13,7 @@
 - Base every source change on `7785a858285f84391b4b872b200e9c70a13ab0a5`; do not modify the original dirty checkout.
 - Preserve historical Semantics-7 through Semantics-12 replay when `supply_recovery.enabled` is absent or false.
 - Recovery must not post a recapitalization, bailout, subsidy, or unrecorded wage-rewrite ledger entry.
-- The acceptance profile uses `gross_margin_coverage_bps: 12500`, `cash_payroll_coverage_periods: 2`, `max_hires_per_firm_per_period: 1`, `demand_buffer_ticks: 5`, `checkpoint_every: 100`, and `checkpoint_keep_last: 2`.
+- The acceptance profile uses `gross_margin_coverage_bps: 12500`, `cash_payroll_coverage_periods: 2`, `max_hires_per_firm_per_period: 1`, `demand_buffer_ticks: 5`, `sales_observation_ticks: 30`, `checkpoint_every: 100`, and `checkpoint_keep_last: 2`.
 - Write each behavioral test first, observe its intended failure, then implement the smallest passing code.
 - Keep persisted run data, credentials, generated static files, and reports out of Git.
 
@@ -45,7 +45,8 @@ def test_assessment_rejects_wage_above_gross_margin_ceiling():
         settings={"gross_margin_coverage_bps": 12_500,
                   "cash_payroll_coverage_periods": 2,
                   "max_hires_per_firm_per_period": 1,
-                  "demand_buffer_ticks": 5},
+                  "demand_buffer_ticks": 5,
+                  "sales_observation_ticks": 30},
     )
     assert assessment.safe_wage_ceiling_cents == 46_080
     assert assessment.allowed_new_hires == 0
@@ -96,17 +97,20 @@ def assess_recovery(*, enabled: bool, price_cents: int, input_cost_cents: int,
                     wage_cents: int, cash_cents: int,
                     current_payroll_cents: int, current_headcount: int,
                     target_headcount: int, recent_sales_units: int,
-                    settings: Mapping[str, int]) -> RecoveryAssessment:
+                    settings: Mapping[str, Any]) -> RecoveryAssessment:
     normalized = _normalized_settings(settings)
     margin = max(0, price_cents - input_cost_cents)
     period_margin = margin * max(0, output_per_worker) * max(1, pay_interval_ticks)
     ceiling = period_margin * 10_000 // normalized["gross_margin_coverage_bps"]
-    demand_cap = max(1, (max(0, recent_sales_units) + (
-        normalized["demand_buffer_ticks"] * max(0, output_per_worker))
-    ) // max(1, output_per_worker))
-    cash_cap = max(0, (max(0, cash_cents) - max(0, current_payroll_cents)) // (
-        max(1, wage_cents) * normalized["cash_payroll_coverage_periods"]
-    ))
+    sales_units = max(0, recent_sales_units)
+    output_units = max(0, output_per_worker)
+    demand_cap = 0 if sales_units == 0 else (
+        sales_units + normalized["demand_buffer_ticks"] * output_units
+    ) // (max(1, output_units) * normalized["sales_observation_ticks"])
+    coverage_periods = normalized["cash_payroll_coverage_periods"]
+    incumbent_reserve = max(0, current_payroll_cents) * coverage_periods
+    new_hire_reserve = max(1, wage_cents) * coverage_periods
+    cash_cap = max(0, (max(0, cash_cents) - incumbent_reserve) // new_hire_reserve)
     allowed = min(normalized["max_hires_per_firm_per_period"],
                   max(0, target_headcount - current_headcount),
                   max(0, demand_cap - current_headcount), cash_cap)
@@ -118,9 +122,16 @@ Use integer arithmetic. Compute the ceiling as gross margin per worker period
 times 10,000 divided by `gross_margin_coverage_bps`. Validate only structural
 profile settings here: a wage floor is assessed later against each firm's actual
 unit economics, rather than against a fabricated global reference product.
-Limit demand by observed sales plus the configured output buffer, cash by two
-full payroll periods, and new jobs by the one-hire limit. Return stable reason
-strings for zero-hire paths.
+Reject unknown configuration keys, and explicitly validate the documented
+`policy_version` and `activation_tick` fields. A zero observed sale quantity
+means zero new-hire demand even when the buffer is nonzero. Reserve the full
+coverage horizon for incumbent payroll before calculating how many proposed
+workers can be carried. Convert sale totals to headcount only after dividing by
+output per worker and `sales_observation_ticks`; limit the buffer to at most one
+quarter of that window. New jobs are then limited by that cash cap, demand, and
+the one-hire limit. `assess_recovery` accepts the normalized profile returned by
+`recovery_settings`, so the public APIs compose. Return stable reason strings
+for zero-hire paths.
 
 - [ ] **Step 4: Run focused tests to verify GREEN**
 
@@ -150,6 +161,7 @@ git commit -m "feat: add sustainable recovery economics"
 
 - Consumes: `RecoveryAssessment` from Task 1.
 - Produces: a recovery firm view with assessment fields, an opt-in viable wage floor, capacity-weighted goods selection, and application-load-aware job selection.
+- Preserves: legacy `recent_sales` transaction count for legacy pricing behavior; recovery uses a separate `recent_sales_units` value derived from the sum of `goods_sale.payload.qty` over the profile's `sales_observation_ticks`.
 
 - [ ] **Step 1: Write failing integration tests**
 
@@ -177,12 +189,18 @@ Expected: recovery assertions fail while the feature-off assertion describes cur
 - [ ] **Step 3: Implement the gated integration**
 
 Add a recovery initial-wage path in `Genesis._staff_firm`, leaving the legacy
-`max(250_000, price * 400)` path untouched when disabled. In `_firm_view`, pass
-actual product margin/output, payroll, cash, headcount, and recent sales to
-`assess_recovery`. In `founder_decision`, post, offer, or accept only when
-`allowed_new_hires > 0`; use the assessment ceiling bounded by the configured
-15,000-cent recovery floor. In `citizen_decision`, use weighted stock selection
-and inverse application-count weighting only when the recovery flag is present.
+`max(250_000, price * 400)` path untouched when disabled or before
+`activation_tick`. In `_firm_view`, retain the legacy transaction-count field
+and separately query `COALESCE(SUM(json_extract(payload_json,'$.qty')),0)` over
+the configured `sales_observation_ticks` before passing actual product
+margin/output, payroll, cash, headcount, and `recent_sales_units` to
+`assess_recovery`. Add a regression in which one multi-unit sale differs from
+several one-unit sale events, so the recovery value cannot accidentally revert
+to a transaction count. In
+`founder_decision`, post, offer, or accept only when `allowed_new_hires > 0`;
+use the assessment ceiling bounded by the configured 15,000-cent recovery
+floor. In `citizen_decision`, use weighted stock selection and inverse
+application-count weighting only when the recovery flag is present.
 
 - [ ] **Step 4: Run focused regression tests to verify GREEN**
 
