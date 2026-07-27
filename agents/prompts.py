@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict
 from typing import Optional
 
 from engine.core import Economy
 from engine.store import load_json
 from communications.projections import AgentKnowledgeProjection
+from world.recovery import assess_recovery, recovery_settings
 from .memory import Memory
 
 
@@ -164,6 +166,13 @@ class ContextBuilder:
                 "information.citizen_bank_visibility must be public_status or "
                 "full_balance_sheet")
 
+    def _active_recovery_settings(self, tick: int) -> dict | None:
+        """Return the opt-in profile only after its configured activation tick."""
+        settings = recovery_settings(self.config)
+        if bool(settings["enabled"]) and int(tick) >= int(settings["activation_tick"]):
+            return settings
+        return None
+
     # ── public: assemble per-role context ────────────────────────────────────
     def build(self, agent_row, tick: int) -> dict:
         role = agent_row["role"]
@@ -176,13 +185,16 @@ class ContextBuilder:
         elif role == "lawyer":
             ctx = self._lawyer_context(agent_row, tick)
         else:
-            ctx = self._citizen_context(agent_row, tick)
+            recovery = self._active_recovery_settings(tick)
+            ctx = self._citizen_context(agent_row, tick, recovery_settings_at_tick=recovery)
             firm = self.store.query_one(
                 "SELECT * FROM firms WHERE founder_agent_id=? AND status<>'bankrupt' LIMIT 1",
                 (agent_row["id"],))
             if firm:
-                ctx["my_firm"] = self._firm_view(firm, tick)
-                ctx["firm_applications"] = self._firm_applications(int(firm["id"]))
+                ctx["my_firm"] = self._firm_view(
+                    firm, tick, recovery_settings_at_tick=recovery)
+                ctx["firm_applications"] = self._firm_applications(
+                    int(firm["id"]), include_posted_wage=recovery is not None)
                 if self.engine_semantics_version >= 6:
                     ctx["firm_job_offers"] = self._firm_job_offers(int(firm["id"]))
                 ctx["purpose"] = "founder"
@@ -402,7 +414,10 @@ class ContextBuilder:
         return "decision"
 
     # ── citizen ──────────────────────────────────────────────────────────────
-    def _citizen_context(self, a, tick: int) -> dict:
+    def _citizen_context(self, a, tick: int, *,
+                         recovery_settings_at_tick: dict | None = None) -> dict:
+        if recovery_settings_at_tick is None:
+            recovery_settings_at_tick = self._active_recovery_settings(tick)
         agent_id = int(a["id"])
         if self.local_currency_action_surfaces:
             checking = self.store.query_one(
@@ -483,7 +498,8 @@ class ContextBuilder:
                 currency_code if self.local_currency_action_surfaces else None),
             "jobs": ([] if self.engine_semantics_version >= 7 and bool(a["retired"])
                      else self._open_jobs(
-                         currency_code if self.local_currency_action_surfaces else None)),
+                         currency_code if self.local_currency_action_surfaces else None,
+                         include_application_count=recovery_settings_at_tick is not None)),
             "listed_firms": listed_firms,
             "banks": self._bank_views(
                 self.citizen_bank_visibility,
@@ -496,6 +512,8 @@ class ContextBuilder:
             "portfolio_day": portfolio_day,
             "career_day": career_day,
         }
+        if recovery_settings_at_tick is not None:
+            context["supply_recovery"] = {"active": True}
         if self.engine_semantics_version >= 7:
             context["savings_balance"] = savings_balance
             context["actor_price_discovery_enabled"] = True
@@ -760,20 +778,33 @@ class ContextBuilder:
             out.append(offer)
         return out
 
-    def _open_jobs(self, currency_code: str | None = None) -> list[dict]:
+    def _open_jobs(self, currency_code: str | None = None, *,
+                   include_application_count: bool = False) -> list[dict]:
         currency_clause = " AND f.currency_code=?" if currency_code is not None else ""
         params = (currency_code,) if currency_code is not None else ()
         order_clause = (
             " ORDER BY j.wage_cents DESC,j.id LIMIT 20" if currency_code is not None
             else " ORDER BY j.wage_cents DESC LIMIT 20")
         out = []
-        for j in self.store.query(
+        if include_application_count:
+            rows = self.store.query(
+                "SELECT j.*,f.currency_code AS firm_currency,COUNT(ap.id) AS application_count "
+                "FROM jobs j JOIN firms f ON f.id=j.firm_id "
+                "LEFT JOIN applications ap ON ap.job_id=j.id "
+                "AND ap.state IN ('pending','negotiating') "
+                f"WHERE j.status='open'{currency_clause} GROUP BY j.id "
+                f"{order_clause}", params)
+        else:
+            rows = self.store.query(
                 "SELECT j.*,f.currency_code AS firm_currency FROM jobs j "
                 "JOIN firms f ON f.id=j.firm_id "
                 f"WHERE j.status='open'{currency_clause} "
-                f"{order_clause}", params):
+                f"{order_clause}", params)
+        for j in rows:
             item = {"job_id": int(j["id"]), "firm_id": int(j["firm_id"]),
                     "title": j["title"], "wage": int(j["wage_cents"])}
+            if include_application_count:
+                item["application_count"] = int(j["application_count"])
             if currency_code is not None:
                 item["currency_code"] = str(j["firm_currency"] or "USD")
             out.append(item)
@@ -1082,7 +1113,10 @@ class ContextBuilder:
         return target
 
     # ── founder firm view ────────────────────────────────────────────────────
-    def _firm_view(self, firm, tick: int) -> dict:
+    def _firm_view(self, firm, tick: int, *,
+                   recovery_settings_at_tick: dict | None = None) -> dict:
+        if recovery_settings_at_tick is None:
+            recovery_settings_at_tick = self._active_recovery_settings(tick)
         firm_id = int(firm["id"])
         prod = load_json(firm["product_json"], {}) or {}
         employee_summary = self.store.query(
@@ -1143,9 +1177,45 @@ class ContextBuilder:
                     "WHERE offering_id=? AND status='open'", (int(active_offering["id"]),),
                     default=0)),
             } if active_offering else None)
+        if recovery_settings_at_tick is not None:
+            observation_ticks = int(recovery_settings_at_tick["sales_observation_ticks"])
+            observation_start = max(0, int(tick) - observation_ticks + 1)
+            recovery_sales_units = int(self.store.scalar(
+                "SELECT COALESCE(SUM(json_extract(payload_json,'$.qty')),0) FROM events "
+                "WHERE kind='goods_sale' AND tick>=? AND tick<=? "
+                "AND json_extract(payload_json,'$.firm_id')=?",
+                (observation_start, int(tick), firm_id), default=0) or 0)
+            output_per_worker = int(prod.get("output_per_worker", 0))
+            wage_floor = int(recovery_settings_at_tick["wage_floor_cents"])
+            recovery_inputs = {
+                "price_cents": int(view["price"]),
+                "input_cost_cents": int(view["unit_cost"]),
+                "output_per_worker": output_per_worker,
+                "pay_interval_ticks": int(self.config.get("firms", {}).get(
+                    "pay_interval_ticks", 30)),
+                "wage_cents": wage_floor,
+                "cash_cents": int(view["cash"]),
+                "current_payroll_cents": int(view["payroll"]),
+                "current_headcount": int(view["employees"]),
+                "target_headcount": int(view["target_headcount"]),
+                "recent_sales_units": recovery_sales_units,
+            }
+            assessment = assess_recovery(
+                enabled=True,
+                settings=recovery_settings_at_tick,
+                **recovery_inputs,
+            )
+            view["recovery"] = {
+                "active": True,
+                "settings": dict(recovery_settings_at_tick),
+                "inputs": recovery_inputs,
+                "recent_sales_units": recovery_sales_units,
+                "assessment": asdict(assessment),
+            }
         return view
 
-    def _firm_applications(self, firm_id: int) -> list[dict]:
+    def _firm_applications(self, firm_id: int, *,
+                           include_posted_wage: bool = False) -> list[dict]:
         if self.engine_semantics_version >= 6:
             rows = self.store.query(
                 "SELECT ap.id AS application_id,ap.agent_id,ap.job_id,ap.state,"
@@ -1168,6 +1238,19 @@ class ContextBuilder:
                 "current_proposer_agent_id": (int(r["proposer_agent_id"])
                                                if r["proposer_agent_id"] is not None else None),
             } for r in rows]
+        if include_posted_wage:
+            rows = self.store.query(
+                "SELECT ap.id AS application_id, ap.agent_id AS agent_id, ap.job_id AS job_id, "
+                "a.occupation AS occupation, a.age AS age,j.wage_cents AS posted_wage "
+                "FROM applications ap JOIN jobs j ON j.id=ap.job_id "
+                "JOIN agents a ON a.id=ap.agent_id "
+                "WHERE j.firm_id=? AND ap.state='pending' ORDER BY ap.id",
+                (firm_id,))
+            return [{"application_id": int(r["application_id"]),
+                     "agent_id": int(r["agent_id"]), "job_id": int(r["job_id"]),
+                     "occupation": r["occupation"], "age": int(r["age"]),
+                     "posted_wage": int(r["posted_wage"])}
+                    for r in rows]
         rows = self.store.query(
             "SELECT ap.id AS application_id, ap.agent_id AS agent_id, ap.job_id AS job_id, "
             "a.occupation AS occupation, a.age AS age FROM applications ap "

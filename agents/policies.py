@@ -228,7 +228,7 @@ def citizen_decision(context: dict) -> dict:
 
     # 4) Consumption: buy goods (unless critically ill). Households with dependents buy more.
     if health != "critical" and not ran:
-        firm = _cheapest_stocked_firm(context)
+        firm = _select_stocked_firm(context, rng)
         if firm and cash > firm["price"] * 2:
             budget = int(cash * (0.12 + 0.03 * int(agent.get("dependents", 0))))
             qty = max(1, min(budget // max(1, firm["price"]), firm["inventory"], 8))
@@ -286,9 +286,9 @@ def citizen_decision(context: dict) -> dict:
                                 "wage": int(offer["posted_wage"])})
                 reasons.append("countering below-posted wage")
         else:
-            jobs = sorted(context.get("jobs", []), key=lambda j: -int(j.get("wage", 0)))
-            if jobs:
-                actions.append({"type": "apply_job", "job_id": jobs[0]["job_id"]})
+            job = _select_open_job(context, rng)
+            if job:
+                actions.append({"type": "apply_job", "job_id": job["job_id"]})
                 reasons.append("seeking work")
 
     # 6) Portfolio: act on sentiment occasionally (weekly-ish cadence gate upstream).
@@ -371,6 +371,46 @@ def _cheapest_stocked_firm(context: dict):
     return min(firms, key=lambda f: f["price"]) if firms else None
 
 
+def _recovery_active(context: dict) -> bool:
+    recovery = context.get("supply_recovery")
+    if isinstance(recovery, dict) and bool(recovery.get("active")):
+        return True
+    firm = context.get("my_firm")
+    recovery = firm.get("recovery") if isinstance(firm, dict) else None
+    return isinstance(recovery, dict) and bool(recovery.get("active"))
+
+
+def _select_stocked_firm(context: dict, rng: random.Random):
+    """Keep legacy cheapest-price demand unless recovery capacity is active."""
+    firms = [
+        firm for firm in context.get("prices", [])
+        if int(firm.get("inventory", 0)) > 0 and int(firm.get("price", 0)) > 0
+    ]
+    if not firms:
+        return None
+    if not _recovery_active(context):
+        return _cheapest_stocked_firm(context)
+    return rng.choices(
+        firms,
+        weights=[max(1, int(firm.get("inventory", 0))) for firm in firms],
+        k=1,
+    )[0]
+
+
+def _select_open_job(context: dict, rng: random.Random):
+    jobs = list(context.get("jobs", []))
+    if not jobs:
+        return None
+    if not _recovery_active(context):
+        return sorted(jobs, key=lambda job: -int(job.get("wage", 0)))[0]
+    return rng.choices(
+        jobs,
+        weights=[1.0 / (1 + max(0, int(job.get("application_count", 0))))
+                 for job in jobs],
+        k=1,
+    )[0]
+
+
 def _safest_other_bank(context: dict, my_bank: int):
     banks = [b for b in context.get("banks", []) if b.get("status") == "open" and b["id"] != my_bank]
     if not banks:
@@ -384,6 +424,26 @@ def _safest_other_bank(context: dict, my_bank: int):
 def _first_startup_action(context: dict):
     eligible = list((context.get("startup_work") or {}).get("eligible_actions") or [])
     return dict(eligible[0]) if eligible else None
+
+
+def _recovery_hiring_limits(firm: dict) -> tuple[int, int, int] | None:
+    """Read the context-built assessment; malformed active profiles fail closed."""
+    recovery = firm.get("recovery")
+    if not isinstance(recovery, dict) or not bool(recovery.get("active")):
+        return None
+    settings = recovery.get("settings")
+    assessment = recovery.get("assessment")
+    if not isinstance(settings, dict) or not isinstance(assessment, dict):
+        return (0, 0, 0)
+    try:
+        floor = int(settings["wage_floor_cents"])
+        ceiling = int(assessment["safe_wage_ceiling_cents"])
+        allowed = int(assessment["allowed_new_hires"])
+    except (KeyError, TypeError, ValueError):
+        return (0, 0, 0)
+    if floor <= 0 or ceiling < floor or allowed < 1:
+        return (0, max(0, ceiling), 0)
+    return (floor, ceiling, allowed)
 
 
 def founder_decision(context: dict) -> dict:
@@ -419,7 +479,38 @@ def founder_decision(context: dict) -> dict:
     applicants = context.get("firm_applications", [])
     payroll = int(firm.get("payroll", 0))
     counters = context.get("firm_job_offers", [])
-    if counters and cash > payroll + 300_00 and employees < int(firm.get("target_headcount", 3)):
+    recovery_limits = _recovery_hiring_limits(firm)
+    if recovery_limits is not None:
+        floor, ceiling, allowed = recovery_limits
+        if allowed > 0:
+            if counters:
+                requested = int(counters[0].get("requested_wage", 0))
+                if floor <= requested <= ceiling:
+                    actions.append({"type": "accept_job_offer", "offer_id": counters[0]["offer_id"]})
+                    reasons.append("accepting a sustainable candidate wage counteroffer")
+            elif context.get("labor_negotiation_enabled") and applicants:
+                candidate = next(
+                    (row for row in applicants if row.get("current_offer_id") is None), None)
+                if candidate:
+                    actions.append({
+                        "type": "make_job_offer",
+                        "application_id": candidate["application_id"],
+                        "wage": floor,
+                    })
+                    reasons.append("opening a sustainable wage negotiation")
+            elif applicants:
+                candidate = applicants[0]
+                posted = int(candidate.get("posted_wage", 0))
+                if floor <= posted <= ceiling:
+                    actions.append({"type": "hire", "application_id": candidate["application_id"]})
+                    reasons.append("hiring at a sustainable posted wage")
+            elif employees == 0:
+                actions.append({
+                    "type": "post_job", "firm_id": firm["firm_id"],
+                    "title": "worker", "wage": floor,
+                })
+                reasons.append("posting a sustainable job")
+    elif counters and cash > payroll + 300_00 and employees < int(firm.get("target_headcount", 3)):
         actions.append({"type": "accept_job_offer", "offer_id": counters[0]["offer_id"]})
         reasons.append("accepting a candidate wage counteroffer")
     elif (context.get("labor_negotiation_enabled") and applicants
