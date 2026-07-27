@@ -1243,7 +1243,8 @@ class ContextBuilder:
                 "FROM applications ap JOIN jobs j ON j.id=ap.job_id "
                 "JOIN agents a ON a.id=ap.agent_id "
                 "LEFT JOIN job_offers jo ON jo.application_id=ap.id AND jo.status='pending' "
-                "WHERE j.firm_id=? AND ap.state IN ('pending','negotiating') ORDER BY ap.id",
+                "WHERE j.firm_id=? AND j.status='open' "
+                "AND ap.state IN ('pending','negotiating') ORDER BY ap.id",
                 (firm_id,))
             return [{
                 "application_id": int(r["application_id"]), "agent_id": int(r["agent_id"]),
@@ -1263,7 +1264,8 @@ class ContextBuilder:
                 "a.occupation AS occupation, a.age AS age,j.wage_cents AS posted_wage "
                 "FROM applications ap JOIN jobs j ON j.id=ap.job_id "
                 "JOIN agents a ON a.id=ap.agent_id "
-                "WHERE j.firm_id=? AND ap.state='pending' ORDER BY ap.id",
+                "WHERE j.firm_id=? AND j.status='open' "
+                "AND ap.state='pending' ORDER BY ap.id",
                 (firm_id,))
             return [{"application_id": int(r["application_id"]),
                      "agent_id": int(r["agent_id"]), "job_id": int(r["job_id"]),
@@ -1274,7 +1276,8 @@ class ContextBuilder:
             "SELECT ap.id AS application_id, ap.agent_id AS agent_id, ap.job_id AS job_id, "
             "a.occupation AS occupation, a.age AS age FROM applications ap "
             "JOIN jobs j ON j.id=ap.job_id JOIN agents a ON a.id=ap.agent_id "
-            "WHERE j.firm_id=? AND ap.state='pending' ORDER BY ap.id",
+            "WHERE j.firm_id=? AND j.status='open' "
+            "AND ap.state='pending' ORDER BY ap.id",
             (firm_id,))
         return [{"application_id": int(r["application_id"]),
                  "agent_id": int(r["agent_id"]), "job_id": int(r["job_id"]),
@@ -1287,7 +1290,7 @@ class ContextBuilder:
             "jo.wage_cents,ap.agent_id,ap.job_id,j.title,j.wage_cents AS posted_wage "
             "FROM job_offers jo JOIN applications ap ON ap.id=jo.application_id "
             "JOIN jobs j ON j.id=ap.job_id WHERE j.firm_id=? "
-            "AND jo.status='pending' AND ap.state='negotiating' "
+            "AND j.status='open' AND jo.status='pending' AND ap.state='negotiating' "
             "AND jo.proposer_agent_id=ap.agent_id ORDER BY jo.id", (firm_id,))
         return [{
             "offer_id": int(row["offer_id"]),
