@@ -51,15 +51,25 @@ def test_assessment_rejects_wage_above_gross_margin_ceiling():
     assert assessment.allowed_new_hires == 0
     assert assessment.reason == "wage_exceeds_margin_ceiling"
 
-def test_profile_validation_rejects_impossible_wage_floor():
-    with pytest.raises(ValueError, match="wage_floor_cents"):
+def test_profile_validation_rejects_insufficient_margin_coverage():
+    with pytest.raises(ValueError, match="gross_margin_coverage_bps"):
         validate_recovery_settings({"supply_recovery": {
             "enabled": True, "wage_floor_cents": 50_000,
-            "gross_margin_coverage_bps": 12_500,
+            "gross_margin_coverage_bps": 9_999,
             "cash_payroll_coverage_periods": 2,
             "max_hires_per_firm_per_period": 1,
             "demand_buffer_ticks": 5,
         }})
+
+def test_profile_validation_defers_wage_floor_to_firm_assessment():
+    settings = validate_recovery_settings({"supply_recovery": {
+        "enabled": True, "wage_floor_cents": 50_000,
+        "gross_margin_coverage_bps": 12_500,
+        "cash_payroll_coverage_periods": 2,
+        "max_hires_per_firm_per_period": 1,
+        "demand_buffer_ticks": 5,
+    }})
+    assert settings["wage_floor_cents"] == 50_000
 ```
 
 - [ ] **Step 2: Run the test to verify RED**
@@ -105,9 +115,12 @@ def assess_recovery(*, enabled: bool, price_cents: int, input_cost_cents: int,
 ```
 
 Use integer arithmetic. Compute the ceiling as gross margin per worker period
-times 10,000 divided by `gross_margin_coverage_bps`. Limit demand by observed
-sales plus the configured output buffer, cash by two full payroll periods, and
-new jobs by the one-hire limit. Return stable reason strings for zero-hire paths.
+times 10,000 divided by `gross_margin_coverage_bps`. Validate only structural
+profile settings here: a wage floor is assessed later against each firm's actual
+unit economics, rather than against a fabricated global reference product.
+Limit demand by observed sales plus the configured output buffer, cash by two
+full payroll periods, and new jobs by the one-hire limit. Return stable reason
+strings for zero-hire paths.
 
 - [ ] **Step 4: Run focused tests to verify GREEN**
 
