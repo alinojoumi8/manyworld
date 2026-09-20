@@ -356,3 +356,11 @@ They do not establish that Jev improves economic outcomes or saves real provider
 cost. Keep this opt-in until a separately authorized matched live study measures
 coverage, realized margins, sales, inventory, firm survival, cost and latency.
 Do not use frozen-study ECE/Brier against selected labels as economic evidence.
+
+
+The [20-tick live founder evaluation](plans/2026-09-20-jev-founder-live-20-tick-results.md)
+completed nineteen successful JEV calls for about US$0.000598. It modestly improved
+revenue against the bounded rule, but sold fewer goods and earned less simulated
+revenue than a post-hoc original-policy control. Keep the current founder pilot
+experimental; revise and reevaluate its candidate restrictions before enabling
+it as the default.

@@ -429,3 +429,10 @@ economic benefit and live-provider performance remain unproven. It does not
 expand JEV into hiring, financing, strategic planning or external Hermes intents.
 Coverage: `tests/test_jev_founder_pricing.py`, plus founder variants in
 `tests/test_jev_runtime.py` and `tests/test_jev_studies.py`.
+
+
+[Live founder validation](plans/2026-09-20-jev-founder-live-20-tick-results.md)
+now records the twenty-tick single-seed test. Integration and replay passed;
+the bounded policy underperformed the original scripted-policy diagnostic.
+Default adoption is not recommended without revising and reevaluating its price
+candidate restrictions.

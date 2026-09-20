@@ -1,5 +1,10 @@
 # JEV founder pricing pilot
 
+**Live validation update:** The [20-tick live results](2026-09-20-jev-founder-live-20-tick-results.md)
+support retaining this as an experiment, but **not enabling the current policy
+as the default**. It underperformed the original scripted policy in the tested
+world. Review the candidate-price restrictions before adoption.
+
 ## Scope and decision
 
 Branch: `codex/jev-founder-pricing`, from JEV commit `f1e68fda`.
