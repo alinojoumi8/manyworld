@@ -52,7 +52,11 @@ class OpenRouterDecisionsAdapter(Adapter):
         import httpx
 
         evaluation = (context or {}).get("_evaluation")
-        if evaluation is None or purpose not in {"decision", "preflight", "decision_evaluation"}:
+        founder_price = (purpose == "founder" and isinstance(evaluation, dict)
+                         and isinstance(evaluation.get("state"), dict)
+                         and evaluation["state"].get("domain") == "founder-price-choice-v1")
+        if evaluation is None or (purpose not in {"decision", "preflight", "decision_evaluation"}
+                                  and not founder_price):
             raise ValueError("OpenRouter Decisions requires a typed evaluation purpose")
         evaluation = validate_evaluation(evaluation)
         key = os.environ.get(self.api_key_env, "").strip()

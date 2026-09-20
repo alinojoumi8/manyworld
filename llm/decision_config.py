@@ -7,7 +7,8 @@ from .decisions import finite_number
 POLICY_VERSION = "bounded-economic-choice-v1"
 POLICY_VERSION_V2 = "bounded-economic-choice-v2"
 POLICY_VERSION_V3 = "bounded-economic-choice-v3"
-POLICY_VERSIONS = {POLICY_VERSION, POLICY_VERSION_V2, POLICY_VERSION_V3}
+FOUNDER_PRICE_VERSION = "founder-price-choice-v1"
+POLICY_VERSIONS = {POLICY_VERSION, POLICY_VERSION_V2, POLICY_VERSION_V3, FOUNDER_PRICE_VERSION}
 
 
 def decision_policy(config: dict) -> dict | None:

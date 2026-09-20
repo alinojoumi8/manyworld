@@ -525,3 +525,16 @@ withdrawals.
 The implementation in PR #20 is authorized for squash merge after its complete
 local gate. V9 live evidence, tagging, publication, and public deployment remain
 separately authorized release actions.
+
+
+## Opt-in typed founder pricing
+
+The [Jev guide](jev.md#experimental-founder-pricing) documents the separate
+`llm.decision_policy.version: founder-price-choice-v1` contract and the
+`runs/jev-founder-offline.yaml` / `runs/jev-founder-live.yaml` profiles. It requires
+Semantics 16 or later, retains existing background routes, and uses the common
+activation, cohort, compute-tier, route, confidence and abstention settings.
+The +/-5% menu bounds, three-tick completed sales window, 20% input-cost markup,
+and seventh-tick strategy routing are fixed by this compiler version; changing
+them requires a new version. Shopping/job quantity and spending settings are
+unused by this founder-only contract. No existing profile enables it implicitly.

@@ -1,0 +1,8 @@
+# Opt-in live pricing only. Requires separate approval before any paid run.
+extends: jev-live.yaml
+firms:
+  listed: 0
+llm:
+  response_contract: required-json-v2
+  decision_policy:
+    version: founder-price-choice-v1

@@ -54,7 +54,7 @@ def typed_handler(request):
 
 
 @pytest.mark.parametrize("profile", ["jev-offline.yaml", "jev-live.yaml"])
-@pytest.mark.parametrize("version", ["bounded-economic-choice-v1", "bounded-economic-choice-v2", "bounded-economic-choice-v3"])
+@pytest.mark.parametrize("version", ["bounded-economic-choice-v1", "bounded-economic-choice-v2", "bounded-economic-choice-v3", "founder-price-choice-v1"])
 def test_world_reconciles_and_replays_exactly(tmp_path, monkeypatch, profile, version):
     monkeypatch.setenv("OPENROUTER_API_KEY", "private-fixture-value")
     transport(monkeypatch, typed_handler)
@@ -97,6 +97,18 @@ def test_world_reconciles_and_replays_exactly(tmp_path, monkeypatch, profile, ve
         proof = verify_replay(path, replay_store.path)
         assert proof["exact"], proof["differences"]
         assert replay_world.gateway._live_dispatch_count == 0
+        if version == "founder-price-choice-v1":
+            receipt = replay_store.query_one(
+                "SELECT id,payload_json FROM events WHERE kind='typed_decision' "
+                "AND json_array_length(payload_json,'$.calls')>0 LIMIT 1")
+            assert receipt
+            for key, invalid in (("purpose", "decision"), ("contract", "unknown"),
+                                 ("compiler", "shopping-job-bundles-v3")):
+                forged = json.loads(receipt["payload_json"])
+                forged[key] = invalid
+                replay_store.update("events", receipt["id"], payload_json=json.dumps(forged))
+                assert not verify_replay(path, replay_store.path)["exact"]
+                replay_store.update("events", receipt["id"], payload_json=receipt["payload_json"])
     finally:
         replay_world.close()
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
