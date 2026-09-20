@@ -6,13 +6,14 @@ import json
 from itertools import product
 
 from llm.decisions import canonical_json, decision_hash, validate_evaluation
-from llm.decision_config import POLICY_VERSION, POLICY_VERSION_V2, POLICY_VERSION_V3
+from llm.decision_config import POLICY_VERSION, POLICY_VERSION_V2, POLICY_VERSION_V3, FOUNDER_PRICE_VERSION
 
 
 COMPILER_VERSION = "shopping-job-bundles-v1"
 COMPILER_VERSIONS = {POLICY_VERSION: COMPILER_VERSION,
                      POLICY_VERSION_V2: "shopping-job-bundles-v2",
-                     POLICY_VERSION_V3: "shopping-job-bundles-v3"}
+                     POLICY_VERSION_V3: "shopping-job-bundles-v3",
+                     FOUNDER_PRICE_VERSION: "founder-prices-v1"}
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,9 @@ def _unsupported(context: dict) -> str | None:
 
 def compile_candidates(context: dict, tick: int, policy: dict) -> DecisionMenu:
     """Compile complete compatible bundles; never query or mutate the world."""
+    if policy["version"] == FOUNDER_PRICE_VERSION:
+        from .founder_pricing import compile_founder_prices
+        return compile_founder_prices(context, tick)
     if type(tick) is not int or context.get("tick") != tick:
         raise ValueError("candidate observation is not bound to the requested tick")
     agent, state = context.get("agent", {}), context.get("state", {})

@@ -20,7 +20,7 @@ def profiles():
         ("baseline", "jev-offline.yaml"), ("jev", "jev-live.yaml"))}
 
 
-@pytest.mark.parametrize("version", ["bounded-economic-choice-v1", "bounded-economic-choice-v2", "bounded-economic-choice-v3"])
+@pytest.mark.parametrize("version", ["bounded-economic-choice-v1", "bounded-economic-choice-v2", "bounded-economic-choice-v3", "founder-price-choice-v1"])
 def test_prospective_pair_and_frozen_roundtrip(tmp_path, monkeypatch, version):
     monkeypatch.setenv("OPENROUTER_API_KEY", "private-fixture-key")
     transport(monkeypatch, typed_handler)

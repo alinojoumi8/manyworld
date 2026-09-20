@@ -1,0 +1,8 @@
+# Isolated founder pricing experiment; all other decisions retain scripted routes.
+extends: jev-offline.yaml
+firms:
+  listed: 0
+llm:
+  response_contract: required-json-v2
+  decision_policy:
+    version: founder-price-choice-v1

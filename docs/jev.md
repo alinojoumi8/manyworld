@@ -1,6 +1,7 @@
 # Jev bounded agent decisions through OpenRouter
 
-Jev is an opt-in selector for routine shopping and job bundles. It chooses from
+Jev is an opt-in selector for routine shopping/job bundles or a separate founder
+pricing pilot. It chooses from
 IDs compiled by this application. The existing action executor checks the chosen
 bundle and applies all economic effects through the ledger. Existing profiles
 keep their original policy. Production adoption remains an experiment until
@@ -309,3 +310,49 @@ including menus with active alternatives; 75 of those turns belonged to staff.
 Keep the existing default pending a better scoped and independently evaluated
 decision policy. These are one-seed operational measurements, not evidence that
 Jev makes better economic decisions. See the [live validation and next-test plan](plans/2026-09-19-jev-live-validation.md).
+
+
+## Experimental founder pricing
+
+`runs/jev-founder-offline.yaml` selects the deterministic equal-menu comparator;
+`runs/jev-founder-live.yaml` selects Jev for the same founder menu. Both leave
+background routes scripted. These are new, explicitly selected experiments;
+existing profiles, external Hermes intents, and prepared worlds are unchanged.
+The implementation and adoption gates are recorded in the
+[founder pilot plan](plans/2026-09-20-jev-founder-pricing-pilot.md).
+
+The persisted contract is `founder-price-choice-v1`, compiler `founder-prices-v1`,
+requiring Semantics 16 or later. It replaces no citizen shopping/job policy.
+There is one `action` Choice question. Code offers hold, admissible +/-5% price
+changes, and abstention; no arbitrary price or action can come from the model.
+Amounts remain integer cents, using the controlled firm's own currency.
+
+Only turns where the deterministic founder policy proposes exactly one price
+change qualify. Required personal/legal/care work, other founder actions,
+specialist roles, operational recovery, and turns on ticks divisible by seven
+retain their original route. Unstaffed firms, unknown production capacity, input
+floor violations and cash below scheduled payroll also retain that route.
+Coverage is intentionally conservative; these filters cannot prove that a firm
+has no other strategic issue. Strategy reviews happen on the founder's normal
+wake schedule; the pilot does not force additional wakeups.
+
+The selector receives a three-completed-tick window of owned-firm sales **units**
+and revenue, not transaction counts or current/future sales. This contract's
+comparator uses those units too. Code calculates an input-cost floor with a 20%
+markup and a separate wage-inclusive floor assuming full production. When the
+current price is below the wage-inclusive floor, only hold or gradual increases
+are allowed. None of these figures predicts demand or guarantees a profit.
+The original executor still checks firm control at execution time. No new ledger
+mutation or schema migration is introduced.
+
+Receipts carry the contract, compiler, exact menu, observation hash, selected ID,
+actual execution results, and metered provider calls. Confidence remains answer
+concentration. The pilot reuses strict provider failure handling and exact
+recorded replay, including purpose-bound receipt verification. Unsupported turns
+produce `outside_menu` receipts; they are not silent failed-provider fallbacks.
+
+The offline and mocked-provider tests establish integration and replay safety.
+They do not establish that Jev improves economic outcomes or saves real provider
+cost. Keep this opt-in until a separately authorized matched live study measures
+coverage, realized margins, sales, inventory, firm survival, cost and latency.
+Do not use frozen-study ECE/Brier against selected labels as economic evidence.

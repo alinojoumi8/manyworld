@@ -417,3 +417,15 @@ public tag.
   committed code, tests, or locally resolvable provenance.
 - A provider cache miss is telemetry, not a simulation failure; missing required
   recorded responses or dangling provenance is a replay failure.
+
+
+## Experimental typed founder pricing
+
+The separate `founder-price-choice-v1` contract compiles bounded founder prices
+and reuses typed gateway accounting, action validation and recorded replay.
+See the [Jev guide](jev.md#experimental-founder-pricing) and
+[pilot plan](plans/2026-09-20-jev-founder-pricing-pilot.md). The feature is opt-in;
+economic benefit and live-provider performance remain unproven. It does not
+expand JEV into hiring, financing, strategic planning or external Hermes intents.
+Coverage: `tests/test_jev_founder_pricing.py`, plus founder variants in
+`tests/test_jev_runtime.py` and `tests/test_jev_studies.py`.

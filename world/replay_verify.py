@@ -543,11 +543,14 @@ def _event_llm_expectations(
         if (type(owner_id) is not int or event_row["phase"] != "EXECUTION"
                 or event_row["subject_type"] != "agent" or event_row["subject_id"] != owner_id
                 or root.get("contract") not in {"bounded-economic-choice-v1", "bounded-economic-choice-v2",
-                                               "bounded-economic-choice-v3"}):
+                                               "bounded-economic-choice-v3", "founder-price-choice-v1"}):
             return expectations, False
         role, valid = _agent_role(conn, owner_id, tick=int(event_row["tick"]))
         purpose = str(root.get("purpose") or "")
-        valid = valid and purpose == "decision"
+        if root.get("contract") == "founder-price-choice-v1":
+            valid = valid and purpose == "founder" and root.get("compiler") == "founder-prices-v1"
+        else:
+            valid = valid and purpose == "decision"
     elif key == "source_llm_call_id" and "agent_id" in root:
         try:
             owner_id = int(root["agent_id"])

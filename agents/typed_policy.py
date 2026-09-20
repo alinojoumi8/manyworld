@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 
-from llm.decision_config import POLICY_VERSION_V2, POLICY_VERSION_V3, decision_policy
+from llm.decision_config import POLICY_VERSION_V2, POLICY_VERSION_V3, FOUNDER_PRICE_VERSION, decision_policy
 from llm.decisions import decision_hash
 from llm.gateway import LLMRequest, LLMResponse
 from .decision_candidates import DecisionMenu, compile_candidates
@@ -26,7 +26,10 @@ class TypedDecisionPolicy:
 
     def prepare(self, context: dict, tick: int) -> DecisionMenu | None:
         policy = self.policy
-        if policy is None or tick < policy["activation_tick"] or context.get("purpose") != "decision":
+        if policy is None or tick < policy["activation_tick"]:
+            return None
+        purpose = "founder" if policy["version"] == FOUNDER_PRICE_VERSION else "decision"
+        if context.get("purpose") != purpose:
             return None
         if policy["version"] in {POLICY_VERSION_V2, POLICY_VERSION_V3} and context.get("agent", {}).get("role"):
             return None
@@ -72,7 +75,9 @@ class TypedDecisionPolicy:
             return TypedDecision(dict(response.parsed), response, receipt, suppress_reasoning=False)
         response = None
         if len(menu.candidates) == 2:
-            choice, status, reason = "wait", "no_candidates", "no_eligible_shopping_or_job_action"
+            choice, status, reason = "wait", "no_candidates", (
+                "no_admissible_price_change" if self.policy["version"] == FOUNDER_PRICE_VERSION
+                else "no_eligible_shopping_or_job_action")
         elif self.policy["primary"]["provider"] == "scripted":
             choice, status, reason = menu.baseline_choice, "selected", "deterministic_menu_baseline"
         else:

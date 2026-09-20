@@ -1707,6 +1707,21 @@ class ContextBuilder:
                     recovery_settings_at_tick["max_headcount_per_firm"]),
                 "assessment": asdict(assessment),
             }
+        if (self.config.get("llm", {}).get("decision_policy") or {}).get(
+                "version") == "founder-price-choice-v1":
+            # The pilot sees only this controlled firm's completed sales window.
+            start, end = max(0, tick - 3), tick - 1
+            totals = self.store.query_one(
+                "SELECT COALESCE(SUM(json_extract(payload_json,'$.qty')),0) AS units, "
+                "COALESCE(SUM(json_extract(payload_json,'$.total_cents')),0) AS revenue "
+                "FROM events WHERE kind='goods_sale' AND tick BETWEEN ? AND ? "
+                "AND json_extract(payload_json,'$.firm_id')=?", (start, end, firm_id))
+            view["pricing_observation"] = {
+                "window_start_tick": start, "window_end_tick": end,
+                "sales_units": int(totals["units"]), "revenue_cents": int(totals["revenue"]),
+                "output_per_worker": int(prod.get("output_per_worker", 0)),
+                "currency_code": str(firm["currency_code"] or "USD"),
+            }
         return view
 
     def _firm_applications(self, firm_id: int, *,
