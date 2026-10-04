@@ -114,6 +114,7 @@ Stop the server with `Ctrl+C` before starting another profile.
 | Regions, contracts, law, and politics | `python run.py --config runs/v2-institutional-rehearsal.yaml` | None |
 | Manually control a citizen | `python run.py --config runs/participant.yaml` | None |
 | Use local or hosted AI | [Provider configuration](docs/configuration.md) | Profile-dependent |
+| 1,000-agent MiniMax M3 world | [`runs/v2-live-minimax.yaml`](runs/v2-live-minimax.yaml) | Live 100-agent core and shared services; deterministic periphery; $150 cap |
 | Connect your own agent | [Client quickstart](clients/README.md) | Depends on your agent |
 
 > **Choose a profile explicitly.** `python run.py` without `--config` selects the live production
