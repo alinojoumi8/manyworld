@@ -127,7 +127,7 @@ without caching by HEAD or dirty status alone.
 
 Exactly one explicit profile is accepted. Its home, manifest connection, active
 admitted actor, authenticated run/connection/actor identity, local URL and existing
-restricted Agent Economy MCP tools must agree. An unadmitted citizen returns
+restricted Manyworld MCP tools must agree. An unadmitted citizen returns
 `admission_required`; no registration, admission or clock endpoint is available
 through the decision transport. Wrong/stale identity stops before Hermes starts.
 

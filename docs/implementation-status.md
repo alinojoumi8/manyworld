@@ -1,4 +1,4 @@
-# Agent Economy — Implementation Status & PRD Gap Assessment
+# Manyworld — Implementation Status & PRD Gap Assessment
 
 > **Current assessment date:** 2026-09-11
 >

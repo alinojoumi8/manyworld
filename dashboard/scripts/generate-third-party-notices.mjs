@@ -58,7 +58,7 @@ const dependencies = Object.entries(lock.packages)
 
 const separator = "=".repeat(78);
 const generated = `${normalize([
-  "AGENT ECONOMY DASHBOARD - THIRD-PARTY NOTICES",
+  "MANYWORLD DASHBOARD - THIRD-PARTY NOTICES",
   "",
   "This file is generated from dashboard/package-lock.json and the license files",
   "distributed with every production dependency, plus build packages whose",
