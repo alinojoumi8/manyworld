@@ -238,7 +238,7 @@ def create_app(world: World, *, served_ticks: int | None = None,
         world, served_ticks=served_ticks, hosted_safe=hosted_safe)
     hub = controller.hub
     store = world.store
-    app = FastAPI(title="Agent Economy Observatory", lifespan=controller.lifespan)
+    app = FastAPI(title="Manyworld Observatory", lifespan=controller.lifespan)
     app.state.run_controller = controller
     from server.v2_api import install_v2_routes
     install_v2_routes(app, world, controller, operator_workspace=operator_workspace)

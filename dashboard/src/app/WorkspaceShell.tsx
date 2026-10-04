@@ -296,7 +296,7 @@ export function WorkspaceShell() {
       <header className="world-os-topbar" inert={activeSegment && activeSegment !== "world" ? true : undefined}>
         <div className="world-os-context city-brand">
           <img src={worldOsEmblem} alt="" />
-          <div><p className="world-os-kicker">Agent Economy</p><h1>City</h1><small>{runId ? 'Run '+runId : 'Identifying run…'}</small></div>
+          <div><p className="world-os-kicker">Manyworld</p><h1>City</h1><small>{runId ? 'Run '+runId : 'Identifying run…'}</small></div>
         </div>
         <details className="city-tools-menu"><summary>Tools</summary><nav aria-label="City tools">
           {['operations','experiments','commons','investigations'].map(path => {const to=workspaceUrl(path);return to?<Link key={path} to={to} onClick={e=>e.currentTarget.closest('details')?.removeAttribute('open')}>{path==='operations'?'Oracle & diagnostics':path==='experiments'?'Research & experiments':path==='commons'?'Public commons':'Evidence search'}</Link>:null;})}
