@@ -1046,7 +1046,7 @@ test("Civic City scales from core agents to clusters and all 300 residents", asy
 test("citizen menu unifies app and onboarding links in the same tab", async ({ page }) => {
   await page.goto("/runs/run-demo/overview");
   await page.locator("summary", { hasText: "Agent connections" }).click();
-  const menu = page.getByRole("navigation", { name: "Agent Economy sections" });
+  const menu = page.getByRole("navigation", { name: "Manyworld sections" });
   await expect(menu).toBeVisible();
 
   const expected = {

@@ -20,7 +20,7 @@ export function BootShell({ error = "" }) {
     return <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-8 px-6 py-16">
       <div>
         <p className="text-xs font-bold tracking-[.18em] text-[var(--civic-cobalt)] uppercase">
-          Agent Economy
+          Manyworld
         </p>
         <h1 className="mt-3 text-4xl font-semibold text-[var(--civic-navy)]">
           City
@@ -38,7 +38,7 @@ export function BootShell({ error = "" }) {
   >
     <div>
       <p className="text-xs font-bold tracking-[.18em] text-[var(--civic-cobalt)] uppercase">
-        Agent Economy
+        Manyworld
       </p>
       <h1 className="mt-3 text-4xl font-semibold text-[var(--civic-navy)]">
         Observatory
