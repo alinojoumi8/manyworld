@@ -1,5 +1,6 @@
 from importlib import import_module
-from inspect import signature
+from inspect import Parameter, signature
+from typing import get_type_hints
 
 
 RETAINED_SYMBOLS = {
@@ -62,6 +63,13 @@ def test_removed_architecture_symbols_do_not_return():
         restored = [name for name in symbol_names if hasattr(module, name)]
         assert not restored, f"{module_name} restored retired symbols {restored}"
 
+
+def test_prepared_attach_uses_an_optional_concrete_passport_repository():
     passports = import_module("agents.passports")
-    parameters = signature(passports.LocalCitizenshipService).parameters
-    assert "repository" not in parameters
+    constructor = passports.LocalCitizenshipService.__init__
+    repository = signature(constructor).parameters["repository"]
+    # Prepared-run attachment reuses validated storage without initializing it.
+    # This concrete seam must not restore the retired PassportRepository protocol.
+    assert repository.kind is Parameter.KEYWORD_ONLY
+    assert repository.default is None
+    assert get_type_hints(constructor)["repository"] == passports.SqlitePassportRepository | None
