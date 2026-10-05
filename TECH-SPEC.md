@@ -1,4 +1,4 @@
-# Agent Economy — Technical Specification
+# Manyworld — Technical Specification
 
 **Version:** 1.1 · **Date:** 2026-07-15 · **Companion to:** PRD.md
 
@@ -8,7 +8,7 @@ This document is written to be handed to an AI coding agent (or a developer) and
 > design for the runtime as *currently implemented*.
 > [`docs/world-os/TECH-SPEC.md`](docs/world-os/TECH-SPEC.md) is a **successor
 > specification**, not a copy of this file — it describes World OS as "an
-> extension of the current Agent Economy process, not a replacement runtime".
+> extension of the current Manyworld process, not a replacement runtime".
 > The overlap between the two is intentional. When they disagree about shipped
 > architecture, **this file wins**; when they disagree about intended direction,
 > the World OS spec wins. See [`docs/world-os/README.md`](docs/world-os/README.md).

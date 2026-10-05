@@ -1,11 +1,11 @@
-# Contributing to Agent Economy
+# Contributing to Manyworld
 
-Thank you for improving Agent Economy. The project values reproducible evidence,
+Thank you for improving Manyworld. The project values reproducible evidence,
 small reviewable changes, and explicit accounting over clever shortcuts.
 
 ## Licensing of contributions
 
-Agent Economy is released under the [MIT License](LICENSE). By submitting a pull
+Manyworld is released under the [MIT License](LICENSE). By submitting a pull
 request you agree that your contribution is licensed under those same terms.
 
 ## Workflow

@@ -1,8 +1,8 @@
-# Agent Economy v2: Architecture and Research Guide
+# Manyworld v2: Architecture and Research Guide
 
 ## Scope and validity boundary
 
-Agent Economy v2 is a fictional legal-political economy for systems research,
+Manyworld v2 is a fictional legal-political economy for systems research,
 education, and reproducible counterfactual experiments. It is not legal advice,
 a court predictor, a financial model, or a forecast of the United States. The
 Northstar Federation, its people, firms, tribunals, agencies, and legislation are

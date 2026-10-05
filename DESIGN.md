@@ -1,5 +1,5 @@
 ---
-name: Agent Economy — Civic Weather Room
+name: Manyworld — Civic Weather Room
 description: A living economic city rendered as a precise, evidence-linked civic science instrument.
 colors:
   survey-navy: "#12233F"
@@ -74,13 +74,13 @@ components:
     padding: "16px"
 ---
 
-# Design System: Agent Economy — Civic Weather Room
+# Design System: Manyworld — Civic Weather Room
 
 ## Overview
 
 **Creative North Star: "The Civic Weather Room"**
 
-Agent Economy should feel like a daylit municipal observatory built to read a
+Manyworld should feel like a daylit municipal observatory built to read a
 living city: cool chart paper, powder-coated instrument housings, cadastral ink,
 translucent acetate overlays, and saturated signals that mean something
 specific. The city is not scenery. It is a spatial index into agents,
@@ -299,7 +299,7 @@ the Atlas when WebGL2 or its lazy bundle is unavailable.
 
 WorldMonitor informed the layout grammar—dominant map, compact layers,
 coordinated activity, and evidence inspection—but no WorldMonitor source,
-assets, or dependencies are imported. Agent Economy remains MIT-licensed while
+assets, or dependencies are imported. Manyworld remains MIT-licensed while
 the reference project is AGPL-3.0-or-later.
 
 ### People and Living Agents
