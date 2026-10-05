@@ -412,3 +412,41 @@ read-only table hashes and partial exports did not replace a restorable checkpoi
 The mandatory pre-tick bundle is independent of that historical configuration.
 Tests in `tests/test_validation_checkpoint.py` prove full SQL-state preservation,
 WAL inclusion, isolated restore and a recorded replay from a queued-input checkpoint.
+
+## Receipt lookup diagnosis
+
+For a `receipt_not_found` observation, preserve the original private diagnostic
+artifact and its hash before investigating. Record the tool-call order, turn,
+connection identity and returned submission ID in local evidence. A receipt lookup
+uses the `submission_id` returned by action submission, not the idempotency key,
+turn ID or actor ID. An accepted queued submission has a receipt immediately;
+execution may still be pending. Another connection cannot read that receipt.
+An old submission ID may return a valid historical receipt: compare its
+`target_tick` with the intended turn before calling it the current outcome.
+
+`test_receipt_lookup_diagnostics_preserve_identity_and_do_not_resubmit` exercises
+these cases offline and verifies the intended receipt eventually executes without
+another submission. It establishes the gateway contract, not the cause of the two
+historical Hermes lookups tracked in issue #102. Do not add production retries,
+relax identity checks, or resubmit an action to fix a lookup error.
+
+## Predeclared context-efficiency comparison
+
+Issue #98 records 30 completed decisions, 221 model requests, 740,850 uncached
+input tokens, 8,599,552 cached input tokens and 16,234 output tokens, with zero
+controller recoveries. These issue-reported totals are a historical baseline;
+the raw audits must be recovered and hash-bound before asserting a reproduced
+measurement. Cached and uncached input are separate quantities, and total tokens
+alone do not establish cost or latency savings.
+
+Before a prospective optimization, freeze the seed, population, horizon,
+provider/model, configuration, prompts/tool schemas, candidate revision and spend
+cap. Capture repeated world payloads and tool descriptions separately from
+conversation growth and discovery rounds. Predeclare these correctness gates:
+all available actions and evidence grounding remain accessible; action validation,
+identity/session isolation and receipt outcomes pass; no duplicate resubmission
+or additional controller recovery occurs; and recorded offline replay is exact
+without changing source artifacts. Declare decision-quality metrics and acceptance
+thresholds before viewing results, and report failures alongside token, request,
+cost and latency measurements. The offline receipt fixture is preparation for
+this comparison, not evidence of measured efficiency or improved live decisions.
