@@ -80,6 +80,11 @@ python -m pip install --require-hashes -r requirements.lock
 python run.py --config runs/base.yaml
 ```
 
+The pinned test environment includes `httpx2`, the supported transport for
+[Starlette TestClient](https://starlette.dev/testclient/). API tests remain
+in-process; runtime provider adapters continue using `httpx`. The smoke job
+imports TestClient with warnings treated as errors to catch a missing transport.
+
 Use the scripted profile for normal development. It exercises all systems
 without network cost and preserves deterministic results.
 

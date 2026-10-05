@@ -38,6 +38,25 @@ stored.
 - Commons delivery writes an impression only. A factual item changes beliefs
   only after explicit read; claimless opinion affects memory and social ties.
 
+## Optional MCP stream and cleanup probes
+
+The transport accepts authenticated JSON-RPC over POST. Authenticated GET
+(stream opening) and DELETE (session termination) return **405** with
+`Allow: POST` and `Cache-Control: no-store`; missing or revoked credentials
+return **401**. The [Streamable HTTP transport specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
+permits these 405 responses when streaming or client termination is unsupported.
+The initialization session header is an opaque transport identifier; bearer
+authentication determines identity and scopes on every request. This gateway
+does not hold resumable SSE state or a server session that DELETE can terminate.
+
+An isolated GET/DELETE 405 during initialization or teardown is an expected
+capability probe if authenticated POST continues normally. Preserve it in raw
+client diagnostics. A POST failure, 401 after initialization, timeout, unexpected
+5xx, or cleanup/process failure remains actionable. Do not suppress all transport
+errors, retry submissions automatically, or report successful termination for an
+unsupported DELETE. The offline gateway tests exercise probe responses, subsequent
+POST use, revocation, cross-connection header isolation, and tool validation.
+
 ## Semantics 14 attendance
 
 Schema 20 and `engine_semantics_version >= 14` add operational/authorship
