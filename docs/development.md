@@ -545,8 +545,31 @@ test names, duration summaries and a 90-second traceback make slow executions
 diagnosable. Run research suites from an unchanged checkout: their manifests bind
 the complete code identity, so edits during execution correctly invalidate them.
 Failed dashboard checks retain Playwright traces and screenshots for seven days.
-Hosted integration and Compose use the pinned MinIO server and client releases
-from the publisher's `quay.io/minio` registry; changing the registry does not
-upgrade the stored-data format or runtime version.
+Hosted integration and Compose build the pinned MinIO server and client from
+official source; see [MinIO source images](#minio-source-images). The previous
+registry pulls are unavailable. Validate the newer source revision on disposable
+volumes before any existing data is used.
 Pull requests should state behavior, tests, live calls/cost,
 compatibility impact, and remaining risk. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## MinIO source images
+
+Quay rejects the former pinned MinIO server/client image pulls. The optional
+hosted integration job and [Compose model](../deploy/compose.yaml) now build
+[official-source images](../deploy/minio/Dockerfile) from fixed upstream commits
+and digest-pinned Go/Debian bases. Build locally with:
+
+```bash
+docker build -f deploy/minio/Dockerfile --target server -t manyworld-minio:2025-10-15-source .
+docker build -f deploy/minio/Dockerfile --target client -t manyworld-mc:2025-08-13-source .
+```
+
+Each image includes the upstream `LICENSE`, `NOTICE`, `CREDITS` and exact source
+URL under `/usr/share/doc/minio/` or `/usr/share/doc/mc/`.
+
+The upstream community projects are archived/source-only. These local images
+restore test/staging availability; they are not evidence of ongoing vendor
+maintenance. Production still needs an explicitly owned update process or a
+maintained S3 service. Preserve existing object-store volumes and verify the
+upgrade/rollback before using the newer server revision on existing data. No
+volume migration or deployment is performed by the build commands.
