@@ -7,12 +7,15 @@ concerns do not live in one large route-registration closure.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import sqlite3
 import time
 from concurrent.futures import Future
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager, ExitStack
+from pathlib import Path
 from threading import Lock
 from typing import AsyncIterator
 
@@ -20,7 +23,7 @@ from fastapi import FastAPI, HTTPException, WebSocket
 
 from engine.ledger import ReconciliationError
 from engine.store import load_json
-from observability import get_logger, log_event as operational_log
+from observability import get_logger, log_event as operational_log, scrub_error_text
 from server.projections.cache import ProjectionSnapshotCache
 from world.loop import World
 
@@ -57,17 +60,32 @@ class WebSocketHub:
         operational_log(logger, logging.INFO, "websocket.disconnected",
                         clients=len(self.clients))
 
+    # One stalled client must not hold every other dashboard's tick hostage.
+    send_timeout_s = 5.0
+
     async def broadcast(self, message: dict) -> None:
-        dead = []
-        for websocket in list(self.clients):
+        clients = list(self.clients)
+        if not clients:
+            return
+        # Serialize once, outside the per-client guard: an unserializable
+        # payload is a programming error, not a reason to drop every client.
+        text = json.dumps(message)
+
+        async def deliver(websocket: WebSocket) -> Exception | None:
             try:
-                await websocket.send_text(json.dumps(message))
-            except Exception as exc:
-                dead.append(websocket)
-                operational_log(logger, logging.WARNING, "websocket.broadcast.failed",
-                                clients=len(self.clients), error_type=type(exc).__name__,
-                                error=str(exc))
-        for websocket in dead:
+                await asyncio.wait_for(
+                    websocket.send_text(text), timeout=self.send_timeout_s)
+            except Exception as exc:  # transport failure or a stalled peer
+                return exc
+            return None
+
+        results = await asyncio.gather(*(deliver(client) for client in clients))
+        for websocket, failure in zip(clients, results):
+            if failure is None:
+                continue
+            operational_log(logger, logging.WARNING, "websocket.broadcast.failed",
+                            clients=len(self.clients), error_type=type(failure).__name__,
+                            error=str(failure))
             self.disconnect(websocket)
 
 
@@ -106,6 +124,11 @@ class RunController:
             else None)
         self.acceptance_artifacts: dict = {}
         self.hosted_safe = bool(hosted_safe)
+        self.replay_checkpoint_paths = None
+        self.replay_checkpoint_root = None
+        self.replay_checkpoint_revision = None
+        self.last_replay_checkpoint = None
+        self._checkpoint_writer_held = False
 
     def is_running(self) -> bool:
         return bool(self._step_active or (self.task and not self.task.done()))
@@ -290,7 +313,8 @@ class RunController:
             self.world.status = "paused"
             self.store.set_meta(status="paused")
             self.store.log_event(
-                self.store.tick, "run_exception", {"error": str(exc)[:500]}, importance=5.0)
+                self.store.tick, "run_exception", {"error": scrub_error_text(exc)},
+                importance=5.0)
             self.store.commit()
             operational_log(logger, logging.ERROR, "run.unhandled_exception",
                             run_id=self.world.gateway.run_id, tick=self.store.tick,
@@ -336,6 +360,8 @@ class RunController:
 
     def _start_locked(self, max_ticks: int | None = None) -> dict:
         self._require_mutable("start")
+        if self.replay_checkpoint_paths is not None:
+            raise HTTPException(status_code=409, detail="prepared_validation_requires_bounded_step")
         if self.acceptance_configured and not self.acceptance_authorized:
             raise HTTPException(
                 status_code=403,
@@ -395,14 +421,24 @@ class RunController:
     async def _stop_locked(self) -> dict:
         self._require_mutable("stop")
         if self.is_running():
+            # A Start that was queued ahead of this Stop clears the world's stop
+            # flag when it launches, so re-assert the request under the lock.
+            self.world.request_stop()
             operational_log(logger, logging.INFO, "run.stop.accepted",
                             run_id=self.world.gateway.run_id, tick=self.store.tick,
                             running=True)
             return {"status": "stopping", "tick": self.store.tick}
+        already_finished = str(self.store.get_meta()["status"]) == "finished"
         self.world.status = "finished"
         self.store.set_meta(status="finished")
         self.store.commit()
-        await self.world.checkpoint_async(self.store.tick, reason="stop")
+        if already_finished:
+            # The Stop that finished the run already wrote this tick's
+            # checkpoint; a repeated Stop must not copy the database again.
+            operational_log(logger, logging.INFO, "run.stop.repeated",
+                            run_id=self.world.gateway.run_id, tick=self.store.tick)
+        else:
+            await self.world.checkpoint_async(self.store.tick, reason="stop")
         meta = self.store.get_meta()
         if meta["active_tick"] is not None:
             deferred = {
@@ -465,7 +501,106 @@ class RunController:
         async with self._control_lock:
             return await self._step_locked()
 
-    async def _step_locked(self) -> dict:
+    async def _snapshot_for_replay_locked(self, expected_run_id: str, expected_tick: int) -> dict:
+        from engine.replay_checkpoint import snapshot_for_replay, source_revision
+        import uuid
+        if self.replay_checkpoint_paths is None:
+            raise HTTPException(status_code=409, detail="validation_checkpoint_not_configured")
+        state = self.diagnostic_state()
+        if (state['running'] or state['status'] not in {'paused', 'created'}
+                or state['pause_reason'] or state['active_tick'] is not None):
+            raise HTTPException(status_code=409, detail="unsafe_validation_checkpoint_boundary")
+        if self.store.conn.in_transaction and not self._checkpoint_writer_held:
+            raise HTTPException(status_code=409, detail="checkpoint_requires_committed_boundary")
+        # JSON round-trip gives the same list representation as stored PRNG state.
+        runtime = {**state, 'target_tick': self.target_tick,
+                   'random': json.loads(json.dumps({
+                       'engine': self.world.engine_prng.getstate(),
+                       'persona': self.world.persona_prng.getstate(),
+                       'lifecycle': self.world.lifecycle_prng.getstate()}))}
+        try:
+            # Keep byte-sensitive verification on every capture, including
+            # edits while already dirty; do not block the event loop hashing.
+            revision = await asyncio.to_thread(source_revision)
+            if revision != self.replay_checkpoint_revision:
+                raise ValueError('server source changed since attachment')
+            result = snapshot_for_replay(self.replay_checkpoint_paths,
+                Path(self.replay_checkpoint_root) / uuid.uuid4().hex,
+                expected_run_id=expected_run_id, expected_tick=expected_tick, runtime=runtime,
+                revision=revision)
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            raise HTTPException(status_code=409, detail="validation_checkpoint_failed:" + type(exc).__name__) from exc
+        self.last_replay_checkpoint = result
+        return result
+
+    @contextmanager
+    def _checkpoint_writers(self):
+        from engine.replay_checkpoint import checkpoint_writer_exclusion
+        with checkpoint_writer_exclusion(self.replay_checkpoint_paths, self.store.conn):
+            self._checkpoint_writer_held = True
+            try:
+                yield
+            finally:
+                self._checkpoint_writer_held = False
+
+    async def snapshot_for_replay(self, expected_run_id: str, expected_tick: int) -> dict:
+        self._require_mutable('snapshot-for-replay')
+        if self._control_lock.locked():
+            raise HTTPException(status_code=409, detail="controller_busy")
+        async with self._control_lock:
+            return await self._snapshot_for_replay_locked(expected_run_id, expected_tick)
+
+    def diagnostic_state(self) -> dict:
+        """Read the clock boundary without readiness probes or state updates."""
+        meta = self.store.get_meta()
+        return {"run_id": meta["run_id"], "tick": self.store.tick,
+                "active_tick": meta["active_tick"], "status": self.world.status,
+                "running": self.is_running(), "control_lock_held": self._control_lock.locked(),
+                "pause_reason": self.world.last_pause_reason,
+                "identity": {"run_id": meta["run_id"], "seed": meta["seed"],
+                    "config_sha256": hashlib.sha256(meta["config_json"].encode()).hexdigest()}}
+
+    def diagnostic_snapshot(self) -> dict:
+        """Read the existing connection without materializing the DB and WAL."""
+        state = self.diagnostic_state()
+        state["database"] = str(Path(self.store.path).resolve())
+        return state
+
+    async def advance_one(self, expected_run_id: str, expected_tick: int) -> dict:
+        """Compare and step once under the existing clock lock; never recover/retry."""
+        # Do not queue a diagnostic behind another control operation. There is
+        # no yield between this check and acquiring an uncontended asyncio lock.
+        if self._control_lock.locked():
+            raise HTTPException(status_code=409, detail="controller_busy")
+        async with self._control_lock:
+            before = self.diagnostic_state()
+            if before["run_id"] != expected_run_id:
+                raise HTTPException(status_code=409, detail="wrong_run_id")
+            if type(expected_tick) is not int or before["tick"] != expected_tick:
+                raise HTTPException(status_code=409, detail="stale_expected_tick")
+            if before["running"] or before["status"] == "running":
+                raise HTTPException(status_code=409, detail="world_running")
+            if before["active_tick"] is not None:
+                raise HTTPException(status_code=409, detail="partial_tick_requires_recovery")
+            # This locked boundary is authoritative even for direct API callers.
+            # Normal Step may reopen finished runs and clear pauses; diagnostics
+            # must never use those recovery semantics implicitly.
+            if before["status"] in {"halted", "finished", "error", "completed", "exhausted"}:
+                raise HTTPException(status_code=409, detail="world_terminal")
+            if before["pause_reason"]:
+                raise HTTPException(status_code=409, detail="attention_pause_requires_recovery")
+            if self.remaining_ticks() == 0:
+                raise HTTPException(status_code=409, detail="served_tick_limit_reached")
+            # No await separates validation from entry into the governed step;
+            # its participant, acceptance and provider guards remain unchanged.
+            result = (await self._step_locked(expected_boundary=(expected_run_id, expected_tick))
+                      if self.replay_checkpoint_paths is not None else await self._step_locked())
+            after = self.diagnostic_state()
+            return {"outcome": "advanced" if after["tick"] == expected_tick + 1
+                    and after["active_tick"] is None else "not_completed",
+                    "before": before, "after": after, "result": result}
+
+    async def _step_locked(self, *, expected_boundary=None) -> dict:
         self._require_mutable("step")
         if self.is_running():
             operational_log(logger, logging.INFO, "run.step.skipped",
@@ -486,21 +621,36 @@ class RunController:
             raise HTTPException(
                 status_code=403,
                 detail="acceptance steps require --acceptance-run and explicit live approval")
-        self._reopen_finished()
-        self.world.last_report_path = None
-        self.world.last_pause_reason = None
-        self.world._pause_requested = False
-        self.world._stop_requested = False
-        self.world.gateway.clear_interrupt()
-        self._step_active = True
+        boundary = ExitStack()
+        if self.replay_checkpoint_paths is not None:
+            if self.acceptance_configured:
+                raise HTTPException(status_code=409, detail="prepared_validation_requires_bounded_step")
+            expected_boundary = expected_boundary or (self.store.get_meta()['run_id'], self.store.tick)
+            try:
+                boundary.enter_context(self._checkpoint_writers())
+                await self._snapshot_for_replay_locked(*expected_boundary)
+            except BaseException as exc:
+                boundary.close()
+                if isinstance(exc, (ValueError, OSError, sqlite3.Error)):
+                    raise HTTPException(status_code=409, detail="validation_checkpoint_writer_unavailable") from exc
+                raise
         try:
+            self._reopen_finished()
+            self.world.last_report_path = None
+            self.world.last_pause_reason = None
+            self.world._pause_requested = False
+            self.world._stop_requested = False
+            self.world.gateway.clear_interrupt()
+            self._step_active = True
             if self.acceptance_configured:
                 from reports.acceptance import advance_acceptance_run
                 target = min(self.acceptance_target_tick, self.store.tick + 1)
                 acceptance = await advance_acceptance_run(self.world, target_tick=target)
             else:
-                summary = await self.world.step()
+                summary = (await self.world.step(entry_guard=boundary)
+                           if self.replay_checkpoint_paths is not None else await self.world.step())
         finally:
+            boundary.close()
             self._step_active = False
         if self.acceptance_configured:
             self.world.status = "paused"

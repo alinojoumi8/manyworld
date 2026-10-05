@@ -102,7 +102,7 @@ export function RunHeader({ status, participant, connected, loading, act, onShoc
         <div className="civic-run-header__brand mr-2">
           <img src={worldOsEmblem} alt="" />
           <div>
-            <div className="eyebrow">Agent Economy</div>
+            <div className="eyebrow">Manyworld</div>
             <div className="mt-0.5 flex items-center gap-2 text-sm font-semibold tracking-wide">
               <h1>Civic Observatory</h1>
               <span role="img" className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-mint-300" : "bg-coral-300"}`} aria-label={connected ? "Live connection" : "Connection offline"} />

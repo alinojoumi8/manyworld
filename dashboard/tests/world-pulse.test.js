@@ -158,12 +158,12 @@ test("World Pulse keeps one observer-safe projection path and all workspace dest
   assert.doesNotMatch(pulseSource, /world-pulse-map" role="img"/);
   assert.doesNotMatch(pulseSource, /api\/llm\/runtime/);
   assert.doesNotMatch(pulseSource, /\.payload\b/);
-  assert.match(shellSource, /\{routeGroups\.map\(group =>/);
+  assert.doesNotMatch(shellSource, /className="world-os-rail"/);
   assert.doesNotMatch(shellSource, /primaryRouteGroups/);
   for (const route of [
-    ["overview", "Pulse"], ["live-city", "City"], ["people", "People"],
+    ["world", "City"], ["people", "People"],
     ["commons", "Commons"], ["investigations", "Evidence Lab"],
-    ["world", "City evidence"], ["organizations", "Institutions"],
+    ["organizations", "Institutions"],
     ["markets", "Markets"], ["politics-law", "Politics & Law"],
     ["news-communications", "Communications"], ["experiments", "Experiments"],
   ]) {

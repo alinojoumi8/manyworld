@@ -19,6 +19,7 @@ reports/out
 LOOP.md
 STATE.md
 loop-*.md
+# Local scratch (gitignored); pytest --basetemp output lives here.
 tmp
 deploy/hostinger/secrets
 data/backups

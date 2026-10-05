@@ -1,9 +1,9 @@
 import { BootShell } from "./components/BootShell";
 import { HostedShell } from "./components/HostedShell";
-import { Observatory } from "./components/Observatory";
 import { useHostedMode } from "./hooks/useHostedMode";
 import { Route, Routes } from "react-router";
 import { WorldOSApp } from "./app/WorldOSApp";
+import { LocalCityHome } from "./app/LocalCityHome";
 
 export default function App() {
   const mode = useHostedMode();
@@ -14,9 +14,14 @@ export default function App() {
   // the local shell is correct before the probe answers. `"/"` is ambiguous and
   // waits behind real chrome rather than a blank page.
   if (mode.loading && mode.presumed !== "local") return <BootShell />;
+  // A probe that failed for good (network error, 5xx, an unrecognised document)
+  // proves nothing about "/": mounting the local observatory there would put the
+  // wrong app on a hosted origin, so the boot chrome stays and says why.
+  if (mode.error && mode.presumed !== "local") return <BootShell error={mode.error} />;
   return <Routes>
     <Route path="/runs/:runId/*" element={<WorldOSApp />} />
-    <Route path="/commons/*" element={<WorldOSApp />} />
-    <Route path="*" element={<Observatory />} />
+    <Route path="/commons/*" element={<LocalCityHome destination="commons" />} />
+    <Route path="/observatory" element={<LocalCityHome />} />
+    <Route path="*" element={<LocalCityHome />} />
   </Routes>;
 }
