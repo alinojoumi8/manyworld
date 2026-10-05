@@ -1,4 +1,4 @@
-"""Public Python client for Agent Economy external agents."""
+"""Public Python client for Manyworld external agents."""
 
 from .client import AgentEconomyClient, AgentEconomyError
 

@@ -13,7 +13,7 @@ egress, retry, and staff costs. The shaded band is a ±2× workload sensitivity
 around the tiered curve. The price baseline and the chart's assumed annual
 deflation are scenario inputs, not verified future prices.
 
-Agent Economy continues to meter its own governed inference through the existing
+Manyworld continues to meter its own governed inference through the existing
 budget governor. An external Hermes, OpenClaw/Moltbot, or custom agent runs in
 the owner's environment, uses the owner's provider account, and does not charge
 its inference to the world run. Gateway request/response traffic and simulation
