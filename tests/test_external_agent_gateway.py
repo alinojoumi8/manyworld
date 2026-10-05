@@ -211,6 +211,53 @@ def test_oauth_pkce_rotation_scope_reduction_expiry_and_revocation(
         world10.runtime.external.authenticate(pair["access_token"], rate_limit=False)
 
 
+def test_receipt_lookup_diagnostics_preserve_identity_and_do_not_resubmit(world10: World):
+    service = world10.runtime.external
+    created = _connection(world10)
+    other = _connection(world10, owner="owner-b")
+    auth = service.authenticate(created["credential"]["token"], rate_limit=False)
+    other_auth = service.authenticate(other["credential"]["token"], rate_limit=False)
+    turn = service.turn(auth)
+
+    def missing_receipt(identity, identifier):
+        count = world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions")
+        with pytest.raises(ExternalAgentError) as failure:
+            service.receipt(identity, identifier)
+        assert failure.value.status_code == 404
+        assert failure.value.code == "receipt_not_found"
+        assert world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions") == count
+
+    # An idempotency key is not a submission ID, before or after acceptance.
+    missing_receipt(auth, "diagnostic-turn-one")
+    queued = service.submit_action(auth, {
+        "target_tick": turn["target_tick"], "action": {"type": "do_nothing"},
+        "observed_projection_hash": turn["projection_hash"],
+        "idempotency_key": "diagnostic-turn-one",
+    })
+    intended_id = queued["submission_id"]
+    count = world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions")
+    assert service.receipt(auth, intended_id)["status"] == "queued"
+    missing_receipt(auth, "diagnostic-turn-one")
+    missing_receipt(other_auth, intended_id)
+    # A legitimate queued receipt exists immediately; it need not be re-submitted.
+    for _ in range(2):
+        assert service.receipt(auth, intended_id)["submission_id"] == intended_id
+    _, decisions = service.decisions_for_tick(turn["target_tick"])
+    world10.runtime.execute_decisions(turn["target_tick"], decisions)
+    executed = service.receipt(auth, intended_id)
+    assert executed["status"] == "executed"
+    assert executed["target_tick"] == turn["target_tick"]
+    assert len(executed["resulting_state_hash"]) == 64
+
+    world10.store.set_meta(tick=turn["target_tick"])
+    next_turn = service.turn(auth)
+    # Old context yields a valid historical receipt, not the next turn's outcome.
+    old_receipt = service.receipt(auth, intended_id)
+    assert old_receipt["target_tick"] < next_turn["target_tick"]
+    assert old_receipt == executed
+    assert world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions") == count
+
+
 def test_turn_idempotency_execution_stale_rejection_and_safe_fallback(world10: World):
     created = _connection(world10)
     service = world10.runtime.external
@@ -1281,3 +1328,54 @@ def test_rate_limit_and_one_hundred_offline_actor_fallbacks_are_bounded(tmp_path
             "AND status='fallback'", default=0) == 100
     finally:
         world.close()
+
+
+@pytest.mark.parametrize("method", ["get", "delete"])
+def test_mcp_optional_probe_contract_and_revocation(world10: World, method: str):
+    created = _connection(world10, tier="observer")
+    token = created["credential"]["token"]
+    client = TestClient(create_app(world10))
+    probe = getattr(client, method)
+    missing = probe("/mcp")
+    assert missing.status_code == 401
+    assert "oauth-protected-resource/mcp" in missing.headers["www-authenticate"]
+    headers = {"Authorization": f"Bearer {token}"}
+    initialized = client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    assert initialized.status_code == 200
+    headers["Mcp-Session-Id"] = initialized.headers["mcp-session-id"]
+    unsupported = probe("/mcp", headers=headers)
+    assert unsupported.status_code == 405
+    assert unsupported.headers["allow"] == "POST"
+    assert unsupported.headers["cache-control"] == "no-store"
+    # Optional stream/cleanup probes do not invalidate the POST connection.
+    assert client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 2, "method": "ping"}).json()["result"] == {}
+    world10.runtime.external.revoke_credentials(
+        created["connection"]["id"], owner_id="owner-a", tenant_id="tenant-a")
+    assert probe("/mcp", headers=headers).status_code == 401
+    assert client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 3, "method": "ping"}).status_code == 401
+
+
+def test_mcp_probe_headers_cannot_transfer_identity_or_grant_tools(world10: World):
+    actor = _connection(world10)
+    observer = _connection(world10, owner="owner-b", tier="observer")
+    client = TestClient(create_app(world10))
+    actor_headers = {"Authorization": f"Bearer {actor['credential']['token']}"}
+    actor_session = client.post("/mcp", headers=actor_headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "initialize"}).headers["mcp-session-id"]
+    observer_headers = {"Authorization": f"Bearer {observer['credential']['token']}",
+                        "Mcp-Session-Id": actor_session}
+    def call(method, params=None):
+        return client.post("/mcp", headers=observer_headers, json={
+            "jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}}).json()
+    assert "ae_action_submit" not in {t["name"] for t in call("tools/list")["result"]["tools"]}
+    denied = call("tools/call", {"name": "ae_action_submit", "arguments": {}})
+    assert denied["error"]["data"]["code"] == "insufficient_scope"
+    assert client.delete("/mcp", headers=observer_headers).status_code == 405
+    # The actor's bearer remains valid after another connection's cleanup probe.
+    assert client.post("/mcp", headers=actor_headers, json={
+        "jsonrpc": "2.0", "id": 3, "method": "ping"}).json()["result"] == {}
+    malformed = call("tools/call", {"name": "ae_turn_wait", "arguments": {"wait_seconds": "invalid"}})
+    assert malformed["error"]["code"] == -32602
