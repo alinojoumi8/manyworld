@@ -68,6 +68,8 @@ jobs:
         run: python -m pip check
       - name: Compile Python sources
         run: python -m compileall -q agents engine hosted llm oracle reports server world run.py
+      - name: Verify supported in-process TestClient transport
+        run: python -W error -c "from fastapi.testclient import TestClient"
       - name: Run focused PRD, replay, documentation, gateway, and export tests
         run: >
           python -m pytest -q
