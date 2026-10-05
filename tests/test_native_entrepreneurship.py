@@ -706,13 +706,30 @@ def test_native_startup_advances_through_funding_ip_and_engine_priced_merger(
     term_sheet = builder.build(
         vc, term_sheet_tick)["startup_work"]["eligible_actions"][0]
     assert term_sheet["type"] == "propose_term_sheet"
+    # A copied supplied action binds the exact offered financing terms.
+    changed_terms = executor.execute_action(term_sheet_tick, vc_id, {
+        **term_sheet, "amount_cents": term_sheet["amount_cents"] + 1,
+    })
+    assert not changed_terms["ok"]
+    assert store.scalar("SELECT COUNT(*) FROM term_sheets") == 0
     proposed = executor.execute_action(term_sheet_tick, vc_id, term_sheet)
     assert proposed["ok"], proposed
+    sheet_id = proposed["term_sheet_id"]
+    offered = dict(store.query_one("SELECT * FROM term_sheets WHERE id=?", (sheet_id,)))
+    for field in ("amount_cents", "equity_bps", "instrument_type"):
+        assert offered[field] == term_sheet[field]
+    assert store.scalar("SELECT COUNT(*) FROM funding_rounds") == 0
 
     accept_tick = term_sheet_tick + 1
     accept = builder.build(founder, accept_tick)["startup_work"]["eligible_actions"][0]
     assert accept["type"] == "accept_term_sheet"
     assert executor.execute_action(accept_tick, founder_id, accept)["ok"]
+    assert not executor.execute_action(accept_tick, target_founder_id, accept)["ok"]
+    assert not executor.execute_action(accept_tick, founder_id, accept)["ok"]
+    accepted = dict(store.query_one("SELECT * FROM term_sheets WHERE id=?", (sheet_id,)))
+    for field in ("amount_cents", "equity_bps", "instrument_type"):
+        assert accepted[field] == offered[field]
+    assert store.scalar("SELECT COUNT(*) FROM funding_rounds") == 0
 
     lawyer = store.query_one("SELECT * FROM agents WHERE id=?", (lawyer_id,))
     diligence_tick = accept_tick + 1
@@ -725,7 +742,25 @@ def test_native_startup_advances_through_funding_ip_and_engine_priced_merger(
     close_round = builder.build(
         vc, close_tick)["startup_work"]["eligible_actions"][0]
     assert close_round["type"] == "close_funding_round"
-    assert executor.execute_action(close_tick, vc_id, close_round)["ok"]
+    investor_account = economy.ledger.agent_checking_id(vc_id)
+    firm_account = int(economy.firms.get(startup_id)["account_id"])
+    before_investor = economy.ledger.balance(investor_account)
+    before_firm = economy.ledger.balance(firm_account)
+    closed = executor.execute_action(close_tick, vc_id, close_round)
+    assert closed["ok"], closed
+    assert economy.ledger.balance(investor_account) == before_investor - offered["amount_cents"]
+    assert economy.ledger.balance(firm_account) == before_firm + offered["amount_cents"]
+    assert economy.startups.cap_table_reconciles(startup_id)
+    assert economy.ledger.reconcile()[0]
+    funded_rows = {
+        table: [tuple(row) for row in store.query(f"SELECT * FROM {table} ORDER BY id")]
+        for table in ("term_sheets", "funding_rounds", "pitches", "transactions", "ledger_entries", "shares")
+    }
+    # Consumed offers and old supplied actions must not disburse again.
+    assert not executor.execute_action(close_tick, vc_id, close_round)["ok"]
+    assert not executor.execute_action(close_tick + 1, vc_id, close_round)["ok"]
+    for table, rows in funded_rows.items():
+        assert rows == [tuple(row) for row in store.query(f"SELECT * FROM {table} ORDER BY id")]
 
     ip_tick = close_tick + 1
     register_ip = builder.build(
