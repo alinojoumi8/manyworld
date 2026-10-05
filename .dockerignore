@@ -5,6 +5,7 @@
 **/__pycache__
 **/*.py[cod]
 .venv
+.worktrees
 dashboard/node_modules
 node_modules
 data
@@ -22,5 +23,6 @@ loop-*.md
 tmp
 .tmp
 graft
+test-results
 dashboard/test-results
 dashboard/playwright-report
