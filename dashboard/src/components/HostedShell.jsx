@@ -88,7 +88,7 @@ function HostedAccess({ config, onAuthenticated }) {
   return <main className="mx-auto flex min-h-screen max-w-6xl items-center px-4 py-10">
     <div className="grid w-full gap-4 lg:grid-cols-[1fr_460px]">
       <section className="rounded-2xl border border-mint-300/15 bg-ink-900/80 p-7">
-        <div className="eyebrow">Agent Economy · Hosted</div>
+        <div className="eyebrow">Manyworld · Hosted</div>
         <h1 className="mt-3 max-w-xl text-4xl font-semibold text-slate-100">One deterministic world per tenant run.</h1>
         <p className="mt-4 max-w-2xl text-sm leading-relaxed text-slate-400">Sessions stay in secure HttpOnly cookies. Tenant and run selection remain in this browser tab only; credentials are never placed in browser storage.</p>
         <div className="mt-8 grid gap-3 sm:grid-cols-3">
