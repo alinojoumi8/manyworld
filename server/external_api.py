@@ -349,7 +349,7 @@ def install_external_routes(app: FastAPI, world, *, hosted_safe: bool = False,
     @app.post("/api/v2/agent/jev-advice")
     async def jev_advice(request: Request, body: JevAdviceBody):
         from agents.hermes_selection import recommend
-        return await recommend(service, world.gateway, auth(request, SCOPE_WORLD_ACT), **body.model_dump())
+        return await recommend(service, world.gateway, await auth(request, SCOPE_WORLD_ACT), **body.model_dump())
 
     @app.get("/api/v2/agent/commons/jev-view")
     async def commons_jev_view(request: Request):
@@ -357,14 +357,14 @@ def install_external_routes(app: FastAPI, world, *, hosted_safe: bool = False,
         if not SelectionService(None, service.config).enabled("commons", service.store.tick):
             raise ExternalAgentError(409, "Commons selection is not enabled", "helper_disabled")
         try:
-            return observation(service, commons, auth(request, SCOPE_COMMONS_READ))
+            return observation(service, commons, await auth(request, SCOPE_COMMONS_READ))
         except CommonsError as exc:
             _raise_commons(exc)
 
     @app.post("/api/v2/agent/commons/jev-advice")
     async def commons_jev_advice(request: Request, body: CommonsAdviceBody):
         from agents.commons_selection import recommend
-        identity = auth(request, SCOPE_COMMONS_WRITE)
+        identity = await auth(request, SCOPE_COMMONS_WRITE)
         try:
             return await recommend(service, commons, world.gateway, identity,
                 action_schema=_commons_action_schema(set(identity["scopes"])), **body.model_dump())
@@ -699,7 +699,7 @@ def install_external_routes(app: FastAPI, world, *, hosted_safe: bool = False,
     async def renew_local_agent_turn(request: Request, body: LocalTurnRenewalBody):
         if hosted_safe:
             raise ExternalAgentError(404, "local turn renewal is unavailable", "not_found")
-        return service.renew_local_turn(auth(request, SCOPE_WORLD_ACT), target_tick=body.target_tick)
+        return service.renew_local_turn(await auth(request, SCOPE_WORLD_ACT), target_tick=body.target_tick)
 
     @app.post("/api/v2/agent/actions", status_code=202)
     async def submit_agent_action(request: Request, body: ActionSubmissionBody):
