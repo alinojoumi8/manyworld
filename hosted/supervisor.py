@@ -35,8 +35,6 @@ from run import open_run
 from run_config import load_config
 from server.app import create_app
 from hosted.snapshot_retention import prune_local_snapshots
-import logging
-from observability import get_logger, log_event as operational_log
 
 logger = get_logger("hosted.supervisor")
 _TERMINAL_RUN_STATUSES = frozenset({"stopped", "failed", "archived"})
