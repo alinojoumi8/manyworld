@@ -20,3 +20,7 @@ STATE.md
 loop-*.md
 # Local scratch (gitignored); pytest --basetemp output lives here.
 tmp
+.tmp
+graft
+dashboard/test-results
+dashboard/playwright-report
