@@ -1301,3 +1301,54 @@ def test_rate_limit_and_one_hundred_offline_actor_fallbacks_are_bounded(tmp_path
             "AND status='fallback'", default=0) == 100
     finally:
         world.close()
+
+
+@pytest.mark.parametrize("method", ["get", "delete"])
+def test_mcp_optional_probe_contract_and_revocation(world10: World, method: str):
+    created = _connection(world10, tier="observer")
+    token = created["credential"]["token"]
+    client = TestClient(create_app(world10))
+    probe = getattr(client, method)
+    missing = probe("/mcp")
+    assert missing.status_code == 401
+    assert "oauth-protected-resource/mcp" in missing.headers["www-authenticate"]
+    headers = {"Authorization": f"Bearer {token}"}
+    initialized = client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    assert initialized.status_code == 200
+    headers["Mcp-Session-Id"] = initialized.headers["mcp-session-id"]
+    unsupported = probe("/mcp", headers=headers)
+    assert unsupported.status_code == 405
+    assert unsupported.headers["allow"] == "POST"
+    assert unsupported.headers["cache-control"] == "no-store"
+    # Optional stream/cleanup probes do not invalidate the POST connection.
+    assert client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 2, "method": "ping"}).json()["result"] == {}
+    world10.runtime.external.revoke_credentials(
+        created["connection"]["id"], owner_id="owner-a", tenant_id="tenant-a")
+    assert probe("/mcp", headers=headers).status_code == 401
+    assert client.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": 3, "method": "ping"}).status_code == 401
+
+
+def test_mcp_probe_headers_cannot_transfer_identity_or_grant_tools(world10: World):
+    actor = _connection(world10)
+    observer = _connection(world10, owner="owner-b", tier="observer")
+    client = TestClient(create_app(world10))
+    actor_headers = {"Authorization": f"Bearer {actor['credential']['token']}"}
+    actor_session = client.post("/mcp", headers=actor_headers, json={
+        "jsonrpc": "2.0", "id": 1, "method": "initialize"}).headers["mcp-session-id"]
+    observer_headers = {"Authorization": f"Bearer {observer['credential']['token']}",
+                        "Mcp-Session-Id": actor_session}
+    def call(method, params=None):
+        return client.post("/mcp", headers=observer_headers, json={
+            "jsonrpc": "2.0", "id": 2, "method": method, "params": params or {}}).json()
+    assert "ae_action_submit" not in {t["name"] for t in call("tools/list")["result"]["tools"]}
+    denied = call("tools/call", {"name": "ae_action_submit", "arguments": {}})
+    assert denied["error"]["data"]["code"] == "insufficient_scope"
+    assert client.delete("/mcp", headers=observer_headers).status_code == 405
+    # The actor's bearer remains valid after another connection's cleanup probe.
+    assert client.post("/mcp", headers=actor_headers, json={
+        "jsonrpc": "2.0", "id": 3, "method": "ping"}).json()["result"] == {}
+    malformed = call("tools/call", {"name": "ae_turn_wait", "arguments": {"wait_seconds": "invalid"}})
+    assert malformed["error"]["code"] == -32602
