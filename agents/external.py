@@ -614,6 +614,12 @@ class ExternalAgentService:
                 _PUBLIC_EVENT_KINDS)]
         result = {"completed_tick": self.store.tick, "actor": actor, "accounts": accounts,
                   "metrics": metrics, "market": prices, "recent_public_events": public_events}
+        if actor_id is not None and self.economy.ballots.active(self.store.tick + 1):
+            result["upcoming_ballots"] = self.economy.ballots.upcoming_choices(actor_id, self.store.tick + 1)
+        if actor_id is not None:
+            frontier = self.economy.frontier.context(actor_id, self.store.tick + 1)
+            if frontier is not None:
+                result["frontier"] = frontier
         if self.economy.engine_semantics_version >= 21 and actor_id is not None:
             result['population_boundary'] = self.economy.population.action_context(actor_id, self.store.tick + 1)
         return result
@@ -629,6 +635,59 @@ class ExternalAgentService:
         created = int(row["created_tick"] or 0)
         offset = (int(earliest) - created) % interval
         return int(earliest) + ((interval - offset) % interval)
+
+    def renew_local_turn(self, auth: dict[str, Any], *, target_tick: int) -> dict[str, Any]:
+        """Explicit operational recovery for an opted-in paused local cohort.
+
+        A normal poll must never reopen a closed mailbox. The local operator
+        may renew an expired, unconsumed window, with its previous lease audited.
+        """
+        if not {SCOPE_WORLD_READ, SCOPE_WORLD_ACT}.issubset(set(auth["scopes"])):
+            raise ExternalAgentError(403, "world.read and world.act required", "insufficient_scope")
+        meta = self.store.get_meta()
+        renewal_enabled = (self.economy.engine_semantics_version == 11 or (
+            self.economy.engine_semantics_version >= 16 and self.config.get("external_gateway", {}).get(
+                "local_turn_renewal_contract") == "paused-next-turn-v2"))
+        if (not renewal_enabled or meta["active_tick"] is not None
+                or meta["status"] not in {"created", "paused"}
+                or target_tick != self.store.tick + 1):
+            raise ExternalAgentError(409, "renewal requires the next day of an opted-in paused local world", "renewal_boundary")
+        current = self.turn(auth)  # validates residency, scope and next wake
+        if int(current["target_tick"]) != target_tick:
+            raise ExternalAgentError(409, "not this citizen's next wake", "renewal_boundary")
+        prior = self.store.query_one(
+            "SELECT id FROM external_action_submissions WHERE connection_id=? AND target_tick=? "
+            "AND status IN ('queued','executed') LIMIT 1", (auth["id"], target_tick))
+        if prior is not None or self._fallback_event_recorded(target_tick, str(auth["id"])):
+            raise ExternalAgentError(409, "the decision has already been consumed or submitted", "renewal_consumed")
+        if current["turn_status"] == "open" and _parse_time(current["deadline"]) > _now():
+            return current
+        if current["turn_status"] not in {"open", "fallback"}:
+            raise ExternalAgentError(409, "this decision window cannot be renewed", "renewal_closed")
+        observations = self.observe(auth)
+        catalog = self.participant.action_catalog(int(auth["actor_id"]))
+        renewed = {**current, "observations": observations, "action_catalog": catalog,
+            "projection_hash": _canonical_hash(observations), "action_catalog_version": _canonical_hash(catalog),
+            "deadline": _iso(_now() + timedelta(seconds=max(self.decision_seconds, 300))), "turn_status": "open"}
+        # Only operational turn metadata changes; rejected/stale receipts and
+        # committed simulation state remain intact. Keep the old lease as evidence.
+        self.store.execute("SAVEPOINT local_turn_renewal")
+        try:
+            self._audit(str(auth["id"]), "turn_renewed", "changed", {
+                "turn_id": current["turn_id"], "target_tick": target_tick,
+                "previous_deadline": current["deadline"], "previous_status": current["turn_status"],
+                "previous_projection_hash": current["projection_hash"], "deadline": renewed["deadline"]})
+            self.store.execute(
+                "UPDATE external_agent_turns SET deadline_at=?,status='open',projection_hash=?,"
+                "action_catalog_version=?,envelope_json=?,updated_at=? WHERE id=?",
+                (renewed["deadline"], renewed["projection_hash"], renewed["action_catalog_version"],
+                 _canonical(renewed), _iso(), current["turn_id"]))
+            self.store.execute("RELEASE SAVEPOINT local_turn_renewal")
+        except BaseException:
+            self.store.execute("ROLLBACK TO SAVEPOINT local_turn_renewal")
+            self.store.execute("RELEASE SAVEPOINT local_turn_renewal")
+            raise
+        return renewed
 
     def turn(self, auth: dict[str, Any]) -> dict[str, Any]:
         if SCOPE_WORLD_READ not in auth["scopes"]:
@@ -1426,6 +1485,40 @@ class ExternalAgentService:
                                 "agent": dict(agent) if agent else None,
                                 "accounts": accounts})
 
+    def _restore_replay_negative_inputs(self, source) -> None:
+        """Restore rejected boundary inputs as audit evidence, never decisions."""
+        events = source.execute(
+            "SELECT * FROM events WHERE tick=? AND phase='CONTROL' "
+            "AND kind IN ('external_action_rejected','external_action_stale') ORDER BY id",
+            (self.store.tick,)).fetchall()
+        with self.store.savepoint('external_negative_inputs'):
+            for event in events:
+                data = load_json(event['payload_json'], {})
+                row = source.execute('SELECT * FROM external_action_submissions WHERE id=?',
+                                     (data.get('submission_id'),)).fetchone()
+                if (row is None or event['kind'] != f"external_action_{row['status']}"
+                        or row['connection_id'] != data.get('connection_id')
+                        or row['actor_id'] != data.get('actor_id')
+                        or row['actor_id'] != event['subject_id']
+                        or row['target_tick'] != data.get('target_tick')):
+                    raise RuntimeError('recorded negative external input binding is invalid')
+                if self.store.query_one('SELECT 1 FROM external_action_submissions WHERE id=?', (row['id'],)):
+                    continue
+                # A stale request may name an older or future target tick. Its
+                # CONTROL event determines when it occurred, not that bad target.
+                for table, identity in [('external_agent_connections', row['connection_id']),
+                                        ('external_agent_turns', row['turn_id']),
+                                        ('external_action_submissions', row['id'])]:
+                    if identity is None or self.store.query_one(f'SELECT 1 FROM {table} WHERE id=?', (identity,)):
+                        continue
+                    recorded = source.execute(f'SELECT * FROM {table} WHERE id=?', (identity,)).fetchone()
+                    if recorded is None:
+                        raise RuntimeError('recorded negative external input dependency is missing')
+                    self.store.insert(table, **dict(recorded))
+                self.store.log_event(event['tick'], event['kind'], data, phase=event['phase'],
+                    subject_type=event['subject_type'], subject_id=event['subject_id'],
+                    importance=event['importance'])
+
     def _replay_decisions(self, tick: int, *, before_night: bool = False,
                           submission_ids=None, validate_only=False,
                           restore_turns=True) -> list[dict[str, Any]]:
@@ -1539,6 +1632,8 @@ class ExternalAgentService:
                      str(turn_row["envelope_json"]), int(turn_row["event_cursor"]),
                      str(turn_row["deadline_at"]), str(turn_row["status"]),
                      str(turn_row["created_at"]), _iso()))
+            if before_night and self.economy.engine_semantics_version < 21:
+                self._restore_replay_negative_inputs(conn)
             out = []
             for row in rows:
                 actor = self.store.query_one("SELECT alive FROM agents WHERE id=?", (int(row["actor_id"]),))
