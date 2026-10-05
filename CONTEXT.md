@@ -1,11 +1,11 @@
-# Agent Economy
+# Manyworld
 
-Agent Economy models persistent residents and institutions in an auditable city whose economic outcomes are settled authoritatively by the world.
+Manyworld models persistent residents and institutions in an auditable city whose economic outcomes are settled authoritatively by the world.
 
 ## Language
 
 **Owner-Run Citizen**:
-A persistent ordinary resident whose decisions are supplied by an independently operated agent runtime while the resident's identity, history, rights, obligations, and world state remain part of Agent Economy. Runtime ownership grants no reserved office, privileged action, or special legal status.
+A persistent ordinary resident whose decisions are supplied by an independently operated agent runtime while the resident's identity, history, rights, obligations, and world state remain part of Manyworld. Runtime ownership grants no reserved office, privileged action, or special legal status.
 _Avoid_: Hermes profile, external agent, bot
 
 **Ordinary Resident**:
@@ -77,7 +77,7 @@ A bounded set of City Expansion Actions justified by recorded Expansion Pressure
 _Avoid_: open-ended growth instruction, unchecked scaling
 
 **Code Proposal**:
-A candidate change to Agent Economy authored as a reviewable artifact. It has no effect on a running city unless independently tested, approved, and released as a new world version.
+A candidate change to Manyworld authored as a reviewable artifact. It has no effect on a running city unless independently tested, approved, and released as a new world version.
 _Avoid_: self-deploying patch, live code mutation
 
 **Builder Workspace**:

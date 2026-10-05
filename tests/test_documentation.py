@@ -32,6 +32,9 @@ MAINTAINED_ROOT_DOCS = (
 )
 HANDBOOK_DOCS = (
     "storage-and-recovery.md", "hostinger-vps.md",
+    "jev.md",
+    "jev-domains.md",
+    "hermes-diagnostics.md",
     "README.md", "getting-started.md", "civic-atlas.md", "research-guide.md",
     "architecture.md", "configuration.md", "api-reference.md",
     "operator-runbook.md", "troubleshooting.md", "development.md",

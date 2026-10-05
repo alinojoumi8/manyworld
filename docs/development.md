@@ -1,5 +1,13 @@
 # Development and testing
 
+[Controlled Hermes/Jev diagnostics](hermes-diagnostics.md) provide explicit read-only
+CHECK, single-citizen DECIDE-ONE and guarded ADVANCE-ONE operations. Live operations
+remain deferred until the execution-policy issue is resolved.
+
+Prospective Jev domain delegation is documented in [Jev v4](jev-domains.md).
+Use its provider-free profiles for development; existing worlds retain their
+recorded decision and voting contracts.
+
 Local operator household inspection is available from a selected person's
 dossier. The [financial inspector contract](plans/2026-09-08-household-financial-inspector.md)
 describes its committed-tick API, `operator_households.enabled` flag, identity
@@ -36,6 +44,10 @@ for commands, ownership and accounting checks. A verified paused archive remains
 pending, and an imported allowance cannot resume execution in a second namespace.
 `tests/test_policy_evidence.py` covers all six fresh/saved and frozen/day/phase
 paths in a separate required CI job using controlled loopback HTTP.
+
+Saved semantics-11 Hermes worlds can opt into persistent geography, exploration,
+settlement construction and resident charter votes. See [frontier geography](frontier.md)
+for the backup-first upgrade and history contract.
 
 ## Repository workflow
 
@@ -155,8 +167,8 @@ npm --prefix dashboard run test:e2e -- e2e/world-os-real-backend.spec.ts
 ```
 
 Without `AE_REAL_RUN_ID`, these opt-in tests are skipped and the mocked suite
-runs normally. The smoke may advance a non-terminal run to tick 3 through the
-ordinary UI controls. Use only a disposable local run. It makes no provider
+runs normally. Complete at least one day in the disposable run first; the smoke
+reads City and its panels without advancing the world. It makes no provider
 calls under `runs/base.yaml` and does not validate hosted-only destinations.
 
 To include the 3D city and test the committed production bundle directly, use
@@ -522,5 +534,14 @@ before merge; the full cross-platform matrix remains a manual workflow
 dispatch. Each OS/Python pair uses all 16 full-suite shards (indices 0–15),
 with a 30-minute limit per job. A focused matrix override provides partial
 coverage until every shard in the pair has a successful result.
+The policy recovery and saved-world recovery suites each run across four
+deterministic shards, retaining every test and the ten-minute job limit. Verbose
+test names, duration summaries and a 90-second traceback make slow executions
+diagnosable. Run research suites from an unchanged checkout: their manifests bind
+the complete code identity, so edits during execution correctly invalidate them.
+Failed dashboard checks retain Playwright traces and screenshots for seven days.
+Hosted integration and Compose use the pinned MinIO server and client releases
+from the publisher's `quay.io/minio` registry; changing the registry does not
+upgrade the stored-data format or runtime version.
 Pull requests should state behavior, tests, live calls/cost,
 compatibility impact, and remaining risk. See [CONTRIBUTING.md](../CONTRIBUTING.md).

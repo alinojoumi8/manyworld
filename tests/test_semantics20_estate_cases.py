@@ -346,7 +346,7 @@ def test_real_construction_refund_keeps_the_contributor_and_routes_the_deceased_
         assert permit["ok"], permit
         approved = executor.execute_action(3, _permit_clerk(world, owner["region_id"]), {
             "type": "decide_construction_permit", "case_id": permit["permit_case_id"],
-            "decision": "approve", "reason_code": "requirements_verified", "dedupe_key": "refund-approval-0001"})
+            "decision": "approve", "reason_code": "requirements_verified", "dedupe_key": "refund-approve"})
         assert approved["ok"], approved
         funded = executor.execute_action(4, donor["id"], {"type": "contribute_construction_funding",
             "project_id": project, "amount_cents": 1200, "dedupe_key": "refund-funding-0001"})

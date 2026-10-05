@@ -21,6 +21,8 @@ from .models import (CancelHouseholdProposal, ProposeHouseholdMove,
 from .models import AcceptEstatePropertyBid, PlaceEstatePropertyBid, WithdrawEstatePropertyBid
 from .models import AcceptEstateUnlistedBid, PlaceEstateUnlistedBid, WithdrawEstateUnlistedBid
 from .models import ProposePopulationMovement, RespondPopulationMovement
+from .frontier import FRONTIER_MODELS
+from .models import CastElectionVote
 
 
 class CommandValidationError(ValueError):
@@ -133,10 +135,12 @@ def default_registry(known_types: Iterable[str]) -> CommandRegistry:
     strict_types = (
         set(COMMUNICATION_MODELS)
         | set(COGNITION_MODELS)
+        | set(FRONTIER_MODELS)
         | set(CIVIC_MODELS)
         | set(CONSTRUCTION_MODELS)
         | set(HOUSEHOLD_MODELS)
         | {"set_time_plan"}
+        | {"cast_election_vote"}
         | legal_mandates
         | set(ESTATE_BID_MODELS)
         | set(POPULATION_MODELS)
@@ -157,6 +161,8 @@ def default_registry(known_types: Iterable[str]) -> CommandRegistry:
             handler_name=f"_do_{command_type}",
             introduced_in_semantics=8,
         ))
+    for command_type, model in FRONTIER_MODELS.items():
+        registry.register(CommandDefinition(command_type, model, "_do_frontier", 11))
     for command_type, model in COGNITION_MODELS.items():
         registry.register(CommandDefinition(
             command_type=command_type,
@@ -185,6 +191,7 @@ def default_registry(known_types: Iterable[str]) -> CommandRegistry:
         ))
     registry.register(CommandDefinition(command_type="set_time_plan", model=SetTimePlan,
         handler_name="_do_set_time_plan", introduced_in_semantics=18))
+    registry.register(CommandDefinition("cast_election_vote", CastElectionVote, "_do_cast_election_vote", 20))
     for command_type in sorted(legal_mandates):
         registry.register(CommandDefinition(command_type=command_type, model=LegacyCommand,
             handler_name=f"_do_{command_type}", introduced_in_semantics=20))

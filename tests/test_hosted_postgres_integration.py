@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 
-from hosted.catalog import CatalogConflict, CatalogError, HostedCatalog, TENANT_CONTEXT_SQL
+from hosted.catalog import CatalogError, CatalogConflict, HostedCatalog, TENANT_CONTEXT_SQL
 from hosted.catalog_auth import CatalogAuthService
 from hosted.migrations import migrate
 from hosted.security import hash_password
