@@ -9,7 +9,7 @@
 
 ## 1. Architecture decision
 
-World OS is an extension of the current Agent Economy process, not a replacement
+World OS is an extension of the current Manyworld process, not a replacement
 runtime. The authoritative topology remains:
 
 - one semantics-versioned Python world kernel;

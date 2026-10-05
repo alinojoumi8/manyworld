@@ -1,4 +1,4 @@
-# Agent Economy — runtime dependencies
+# Manyworld — runtime dependencies
 # Core simulation kernel uses only the Python standard library (sqlite3, asyncio, json, ...).
 # The API server and real LLM adapters need the packages below.
 fastapi>=0.110

@@ -153,7 +153,13 @@ class Economy:
             institution.population = self.population
         self.urban = UrbanDevelopment(self)
         self.firms.urban = self.urban
+        from .frontier import Frontier
+        self.frontier = Frontier(self)
         self.lifecycle.urban = self.urban
+        from .ballots import RecordedBallots
+        self.ballots = RecordedBallots(self)
+        self.gov.ballots = self.ballots
+        self.politics.ballots = self.ballots
 
     # ── system accounts (created once at genesis) ────────────────────────────
     def ensure_system_accounts(self) -> None:
