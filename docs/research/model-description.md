@@ -1,4 +1,4 @@
-# Agent Economy model description
+# Manyworld model description
 
 Model-description ID: **agent-economy-odd-v1**. First written 2026-09-06; updated
 through Semantics 16 and phase recovery on 2026-09-07. This describes implemented mechanisms, including
