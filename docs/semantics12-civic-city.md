@@ -86,7 +86,7 @@ twice.
   lost-production, and firm-entry metrics.
 - `scripts/benchmark_civic_city.py` measures bounded query plans at scale.
 
-The scenario is a fictional policy mechanism inside Agent Economy. It is not a
+The scenario is a fictional policy mechanism inside Manyworld. It is not a
 forecast of real licensing systems.
 
 ## Acceptance evidence

@@ -1,4 +1,4 @@
-# Agent Economy handbook
+# Manyworld handbook
 
 The root [README](../README.md) is the friendly project entry point. This
 handbook separates user, operator, researcher, developer, and audit material so

@@ -109,7 +109,7 @@ def test_migration_join_documents_and_security_headers(citizen_client):
     join = client.get("/join/local-sandbox")
     assert join.status_code == 200
     assert "Hermes Local Sandbox" in join.text
-    assert 'aria-label="Agent Economy sections"' in join.text
+    assert 'aria-label="Manyworld sections"' in join.text
     assert 'target="_blank"' not in join.text
     assert 'rel="icon"' in join.text
     assert 'href="/runs/passport-test/commons"' in join.text

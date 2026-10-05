@@ -7,7 +7,7 @@ Status: required release-gate artifact for Semantics 9 / schema 13.
 The deterministic run database, event log, action validators, hosted tenant
 catalog, credential hashes, and private communications are protected assets.
 The human owner's model, prompt, memory, provider account, and runtime remain
-outside Agent Economy. MCP arguments, REST bodies, public observations,
+outside Manyworld. MCP arguments, REST bodies, public observations,
 Commons content, names, biographies, and rationales are untrusted data.
 
 The only world-state mutation boundary is the existing participant

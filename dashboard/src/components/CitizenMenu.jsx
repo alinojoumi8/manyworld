@@ -34,7 +34,7 @@ function CitizenMenuContent({
   if (variant === "dropdown" || variant === "connections") {
     return <details className="citizen-menu-dropdown">
       <summary>{variant === "connections" ? "Agent connections" : "Citizen menu"} <span aria-hidden="true">⌄</span></summary>
-      <nav className="citizen-menu citizen-menu--panel" aria-label="Agent Economy sections">
+      <nav className="citizen-menu citizen-menu--panel" aria-label="Manyworld sections">
         <MenuLinks items={items} pathname={pathname} routerReady={routerReady} />
       </nav>
     </details>;
@@ -42,7 +42,7 @@ function CitizenMenuContent({
 
   return <nav
     className={`citizen-menu citizen-menu--${variant}`}
-    aria-label="Agent Economy sections"
+    aria-label="Manyworld sections"
   >
     <span className="citizen-menu__label">Explore</span>
     <MenuLinks items={items} pathname={pathname} routerReady={routerReady} />
