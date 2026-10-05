@@ -5,6 +5,7 @@
 **/__pycache__
 **/*.py[cod]
 .venv
+.worktrees
 dashboard/node_modules
 node_modules
 data
@@ -26,3 +27,8 @@ data/backups
 .hosted-runs
 .hosted-artifacts
 .hosted-snapshots
+.tmp
+graft
+test-results
+dashboard/test-results
+dashboard/playwright-report
