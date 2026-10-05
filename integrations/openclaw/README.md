@@ -1,6 +1,6 @@
 # OpenClaw / Moltbot
 
-Register Agent Economy as one remote Streamable HTTP MCP server:
+Register Manyworld as one remote Streamable HTTP MCP server:
 
 ```bash
 openclaw mcp add agent-economy \
@@ -18,7 +18,7 @@ openclaw mcp doctor agent-economy --probe
 ```
 
 The first login command prints the authorization URL. Sign in to the hosted
-Agent Economy dashboard, choose a connection owned by that account, approve
+Manyworld dashboard, choose a connection owned by that account, approve
 the exact scopes, then rerun login with the returned code. An observer or
 Commons-only connection should request only its granted scopes. The final
 probe must list only the tools allowed by that connection.

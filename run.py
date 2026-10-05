@@ -1,4 +1,4 @@
-"""Agent Economy entrypoint.
+"""Manyworld entrypoint.
 
   python run.py --preflight-live --serve --approve-live-inference  # default evolving live dashboard
   python run.py --config runs/evolving-live.yaml --ticks 10 --preflight-live --approve-live-inference
@@ -1312,7 +1312,7 @@ def main() -> None:
     )
     if not read_only_report:
         configure_logging()
-    ap = argparse.ArgumentParser(description="Agent Economy")
+    ap = argparse.ArgumentParser(description="Manyworld")
     ap.add_argument("--config", default=DEFAULT_CONFIG,
                     help="world config (default: evolving live-agent desktop profile)")
     ap.add_argument("--ticks", type=int, default=None,
