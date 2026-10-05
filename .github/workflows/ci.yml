@@ -30,6 +30,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  jev-pilot:
+    name: Typed Jev decisions and exact replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --require-hashes -r requirements.lock
+      - name: Verify typed contracts, budgets, loopback HTTP, hybrid worlds and studies
+        run: python -m pytest -q tests/test_jev_*.py tests/test_live_response_contract.py
+      - name: Rehearse 100 ticks and verify exact replay without networking
+        run: python scripts/jev_domains_acceptance.py --out reports/out/jev-domains-ci --ticks 100
+
   smoke:
     name: Python smoke test
     runs-on: ubuntu-latest
@@ -61,6 +80,13 @@ jobs:
           tests/test_personal_names.py
           tests/test_hermes_citizens_operator.py
           tests/test_hermes_supervision.py
+          tests/test_hermes_diagnostics.py
+          tests/test_founding_catalog.py
+          tests/test_pitch_catalog.py
+          tests/test_native_entrepreneurship.py
+          tests/test_prepared_server.py
+          tests/test_validation_checkpoint.py
+          tests/test_inspection_snapshot.py
           tests/test_research_export.py
           tests/test_prd_completion.py
           tests/test_recorded_replay_golden.py
@@ -346,8 +372,11 @@ jobs:
         run: python -m pip install --require-hashes -r requirements.lock
       - name: Verify original allowances, saved policies, pauses and recorded replay
         # Controlled loopback HTTP only; no provider keys or paid completions.
+        # CPython 3.12's timed traceback dump can race with live frames and crash:
+        # https://github.com/python/cpython/issues/140815
+        # Keep pytest's fatal-signal handler and the ten-minute job limit.
         run: >
-          python -m pytest -v --durations=10 -o faulthandler_timeout=90
+          python -m pytest -v --durations=10 -o faulthandler_timeout=0
           -p scripts.pytest_shard --ci-shard-index ${{ matrix.shard }} --ci-shard-count 4
           tests/test_policy_recovery.py tests/test_policy_origins.py
 
@@ -412,8 +441,9 @@ jobs:
       - name: Verify saved origins, both market continuations and operator recovery
         # Separate these actual world/replay executions from the broader
         # research job, which already took eight minutes before operator cases.
+        # Avoid the same CPython 3.12 timed-traceback race described above.
         run: >
-          python -m pytest -v --durations=10 -o faulthandler_timeout=90
+          python -m pytest -v --durations=10 -o faulthandler_timeout=0
           -p scripts.pytest_shard --ci-shard-index ${{ matrix.shard }} --ci-shard-count 4
           tests/test_checkpoint_origins.py
           tests/test_checkpoint_studies.py
