@@ -75,8 +75,8 @@ export default function CityViewport({envelope,snapshot,runId,tick,status,stale,
   const persistCamera=()=>{const value=scene.current?.cameraState();if(value)cameraChangeRef.current(value);};
   const camera=(action:Parameters<CityScene['cameraAction']>[0])=>{scene.current?.cameraAction(action);persistCamera();};
   const focusSelection=()=>{if(selected){scene.current?.focus(selected.key);persistCamera();}};
-  return <section className={'city3d'+(embedded?' city3d--embedded':'')} aria-label="Agent Economy 3D city">
-    {!embedded&&<header className="city3d-heading"><div><p>AGENT ECONOMY / CITY 3D</p><h2>A city with an economy.</h2></div>
+  return <section className={'city3d'+(embedded?' city3d--embedded':'')} aria-label="Manyworld 3D city">
+    {!embedded&&<header className="city3d-heading"><div><p>MANYWORLD / CITY 3D</p><h2>A city with an economy.</h2></div>
       <div className="city3d-state"><strong>{historical?'Historical':stale?'Stale':status||'Connecting'}</strong><span>Tick {city?.envelope.tick??'—'} · {city?.instances.filter(i=>i.entityType==='agent').length??0} visible agents</span></div></header>}
     {!embedded&&<div className="city3d-toolbar" role="group" aria-label="City layers">
       <label>Show<select value={layer} onChange={e=>setLayer(e.target.value)}><option value="all">Everything</option><option value="place">Places</option><option value="firm">Businesses</option><option value="agent">Citizens</option><option value="bank">Banks</option></select></label>

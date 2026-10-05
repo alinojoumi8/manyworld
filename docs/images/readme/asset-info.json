@@ -6,5 +6,21 @@
   "sha256": "084fd76e1843be7f96f7814f88d571e43fd5e400f9efb8b6f6dcbb4b002411cd",
   "prompt_summary": "Isometric miniature economic society on midnight navy: homes, two banks, civic hall, workshops, market square and citizens; amber and teal connections fade into blueprint lines. No text, logos or UI.",
   "representation": "Concept artwork, not a screenshot, measured outcome or simulation geometry",
-  "processing": "Original generated PNG copied unchanged"
+  "processing": "Original generated PNG copied unchanged",
+  "application_screenshots": [
+    {
+      "asset": "manyworld-city.png",
+      "purpose": "Manyworld README application screenshot",
+      "captured_on": "2026-10-04",
+      "source": "Local production dashboard captured with Playwright Chromium",
+      "profile": "runs/simcity.yaml",
+      "run_id": "7567b9b6d3",
+      "tick": 0,
+      "agents": 300,
+      "provider_calls": 0,
+      "sha256": "76320c77c29a7377b99daa2b2a8e54abd7afeb17348e0f9be30f8af57c775d8b",
+      "representation": "Actual experimental 3D viewer and recorded activity; buildings, roads, housing scenery and marker offsets include illustrative geometry",
+      "processing": "Unedited 1600 by 1000 browser screenshot"
+    }
+  ]
 }
