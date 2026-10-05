@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { NavLink, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Link, Outlet, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import worldOsEmblem from "../assets/world-os-emblem.png";
+import { CityRunControls } from "../city/CityRunControls";
+import { cityEvidenceParams } from "./cityNavigation.js";
 import { CitizenMenu } from "../components/CitizenMenu";
 import { FreshnessBadge, type ProjectionTransport } from "../components/FreshnessBadge";
 import { useModalFocus } from "../components/useModalFocus";
@@ -9,6 +11,7 @@ import { projectionApi, workspaceApi } from "./api";
 import { searchResultPath, workspacePath, type SearchResultItem, type SearchResultKind } from "./commandNavigation";
 import { parseObserverViewState, projectionScopeParams } from "./observerViewState";
 import { useProjectionSocket } from "./useProjectionSocket";
+import { workspaceRouteSegment } from "./worldOSRouting.js";
 
 type GlyphName =
   | "overview" | "world" | "people" | "organizations" | "markets"
@@ -62,16 +65,12 @@ type CommandGroup = {
 
 const routeGroups: Array<{ label: string; items: RouteItem[] }> = [
   { label: "Civic Atlas", items: [
-    { path: "overview", label: "Pulse", caption: "What changed and why it matters", icon: "overview" },
-    /* City is the full-screen recorded-world renderer. The deeper world route
-       remains the evidence-rich workspace for agents, places, and construction. */
-    { path: "live-city", label: "City", caption: "The recorded world, full screen", icon: "street" },
+    { path: "world", label: "City", caption: "Explore places, recorded days, and evidence", icon: "street" },
     { path: "people", label: "People", caption: "Living Agents, projects, and evidence", icon: "people" },
     { path: "commons", label: "Commons", caption: "The public information economy", icon: "commons" },
     { path: "investigations", label: "Evidence Lab", caption: "Trace cause and inspect proof", icon: "investigations" },
   ] },
   { label: "Deep dives", items: [
-    { path: "world", label: "City evidence", caption: "Agents, places, and construction", icon: "world" },
     { path: "organizations", label: "Institutions", caption: "Firms and public organizations", icon: "organizations" },
     { path: "markets", label: "Markets", caption: "Goods, capital, and prices", icon: "markets" },
     { path: "politics-law", label: "Politics & Law", caption: "Power and public rules", icon: "politics" },
@@ -114,14 +113,29 @@ function Glyph({ name }: { name: GlyphName }) {
 }
 
 export function WorkspaceShell() {
-  const { runId = "run" } = useParams();
+  const { runId: routeRunId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const observerState = useMemo(() => parseObserverViewState(search), [search]);
   const tick = observerState.tick;
-  const transport = useProjectionSocket(tick !== "live") as ProjectionTransport;
-  const [railCollapsed, setRailCollapsed] = useState(false);
+  const transport = useProjectionSocket(tick !== "live", tick === "live") as ProjectionTransport;
+  const modeQuery = useQuery({
+    queryKey: ["world-os", "mode"],
+    queryFn: () => workspaceApi<ModeDocument>("/api/v2/mode"),
+    staleTime: Infinity,
+    retry: false,
+  });
+  /*
+   * Bare `/commons` carries no `:runId`. The run is still knowable: the mode
+   * document's navigation block names it, and so does the server hello on the
+   * projection socket. Until one of them has answered there is no run id at all,
+   * and the rail must say so rather than link to a made-up "run".
+   */
+  const runId = routeRunId
+    ?? modeQuery.data?.navigation?.run_id
+    ?? transport.runId
+    ?? null;
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [debouncedCommandQuery, setDebouncedCommandQuery] = useState("");
@@ -130,7 +144,8 @@ export function WorkspaceShell() {
   const commandInput = useRef<HTMLInputElement>(null);
   const commandTrigger = useRef<HTMLButtonElement>(null);
   const commandReturnFocus = useRef<HTMLElement | null>(null);
-  const activeRoute = routes.find(route => location.pathname.includes("/" + route.path)) || routes[0];
+  const activeSegment = workspaceRouteSegment(location.pathname);
+  const activeRoute = routes.find(route => route.path === activeSegment) || routes[0];
   const normalizedCommandQuery = commandQuery.trim().toLowerCase();
   const filteredRoutes = useMemo(() => routes.filter(route =>
     (route.label + " " + route.caption).toLowerCase().includes(normalizedCommandQuery),
@@ -150,7 +165,7 @@ export function WorkspaceShell() {
 
   const entitySearch = useQuery({
     queryKey: [
-      "world-os", runId, "search", observerState.fork, tick,
+      "world-os", runId ?? "", "search", observerState.fork, tick,
       debouncedCommandQuery, "agent,firm,event,communication_thread",
     ],
     queryFn: ({ signal }) => {
@@ -211,13 +226,6 @@ export function WorkspaceShell() {
     ? entitySearch.error
     : null;
 
-  const modeQuery = useQuery({
-    queryKey: ["world-os", "mode"],
-    queryFn: () => workspaceApi<ModeDocument>("/api/v2/mode"),
-    staleTime: Infinity,
-    retry: false,
-  });
-
   const openCommand = useCallback((returnTarget?: HTMLElement | null) => {
     commandReturnFocus.current = returnTarget
       || (document.activeElement instanceof HTMLElement ? document.activeElement : commandTrigger.current);
@@ -237,9 +245,9 @@ export function WorkspaceShell() {
   });
 
   useEffect(() => setDraftTick(tick === "live" ? "" : tick), [tick]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      if ((activeSegment === "world" || activeSegment === "overview") && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         if (commandOpen) closeCommand();
         else openCommand();
@@ -247,12 +255,12 @@ export function WorkspaceShell() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeCommand, commandOpen, openCommand]);
+  }, [activeSegment, closeCommand, commandOpen, openCommand]);
   useEffect(() => {
     setActiveCommandIndex(commandChoices.length ? 0 : -1);
   }, [commandChoices]);
 
-  const workspaceUrl = (path: string) => workspacePath(runId, path, search);
+  const workspaceUrl = (path: string) => (runId === null ? null : workspacePath(runId, path, activeSegment === "world" ? cityEvidenceParams(observerState) : search));
   const setTick = (value: string | null) => {
     const next = new URLSearchParams(search);
     if (value) next.set("tick", value); else next.delete("tick");
@@ -266,8 +274,8 @@ export function WorkspaceShell() {
   const openChoice = (choice: CommandChoice) => {
     const destination = choice.route
       ? workspaceUrl(choice.route.path)
-      : choice.result
-        ? searchResultPath(runId, choice.result, search)
+      : choice.result && runId !== null
+        ? searchResultPath(runId, choice.result, activeSegment === "world" ? cityEvidenceParams(observerState) : search)
         : null;
     if (!destination) return;
     closeCommand();
@@ -280,49 +288,23 @@ export function WorkspaceShell() {
     ));
   };
 
-  return <div className={"world-os-shell min-h-screen text-slate-200" + (railCollapsed ? " world-os-shell--collapsed" : "")}>
+  return <div className="world-os-shell city-shell min-h-screen text-slate-200">
     <a href="#workspace-main" className="world-os-skip">Skip to workspace</a>
-    <aside className="world-os-rail">
-      <div className="world-os-brand">
-        <img src={worldOsEmblem} alt="" />
-        <div className="world-os-brand-copy"><strong>CIVIC ATLAS</strong><span>Agent Economy</span></div>
-        <button className="world-os-rail-toggle" type="button" onClick={() => setRailCollapsed(value => !value)} aria-label={railCollapsed ? "Expand workspace rail" : "Collapse workspace rail"} aria-pressed={railCollapsed}>
-          <Glyph name="panel" />
-        </button>
-      </div>
-      <nav className="world-os-nav" aria-label="Civic Atlas workspaces">
-        {routeGroups.map(group => <div className="world-os-nav-group" key={group.label}>
-          <p className="world-os-nav-group-title">{group.label}</p>
-          <div className="world-os-nav-group-items">
-            {group.items.map(route => <NavLink
-              key={route.path}
-              to={workspaceUrl(route.path)}
-              aria-label={route.label}
-              title={railCollapsed ? route.label : undefined}
-              className={({ isActive }) => "world-os-nav-link" + (isActive ? " active" : "")}
-            >
-              <span className="world-os-nav-icon"><Glyph name={route.icon} /></span>
-              <span className="world-os-nav-copy"><strong>{route.label}</strong><small>{route.caption}</small></span>
-              <span className="world-os-nav-indicator" aria-hidden="true" />
-            </NavLink>)}
-          </div>
-        </div>)}
-      </nav>
-      <div className="world-os-rail-footer">
-        <a href="/"><span className="world-os-rail-orbit" aria-hidden="true" /><span className="world-os-rail-footer-copy"><strong>Classic Observatory</strong><small>Open full legacy surface</small></span></a>
-      </div>
-    </aside>
+
 
     <section className="world-os-workbench">
-      <header className="world-os-topbar">
-        <div className="world-os-context">
-          <p className="world-os-kicker">{activeRoute.group} workspace</p>
-          <div><h1>{activeRoute.label}</h1><span className="world-os-run-pill" title={runId}>Run {runId}</span></div>
+      <header className="world-os-topbar" inert={activeSegment && activeSegment !== "world" ? true : undefined}>
+        <div className="world-os-context city-brand">
+          <img src={worldOsEmblem} alt="" />
+          <div><p className="world-os-kicker">Manyworld</p><h1>City</h1><small>{runId ? 'Run '+runId : 'Identifying run…'}</small></div>
         </div>
+        <details className="city-tools-menu"><summary>Tools</summary><nav aria-label="City tools">
+          {['operations','experiments','commons','investigations'].map(path => {const to=workspaceUrl(path);return to?<Link key={path} to={to} onClick={e=>e.currentTarget.closest('details')?.removeAttribute('open')}>{path==='operations'?'Oracle & diagnostics':path==='experiments'?'Research & experiments':path==='commons'?'Public commons':'Evidence search'}</Link>:null;})}
+        </nav></details>
         <CitizenMenu
-          runId={runId}
+          runId={runId ?? ""}
           navigation={modeQuery.data?.navigation ?? null}
-          variant="dropdown"
+          variant="connections"
         />
         <div className="world-os-top-actions">
           <form className="world-os-tick-control" onSubmit={submitTick} aria-label="Simulation tick travel">
@@ -331,7 +313,7 @@ export function WorkspaceShell() {
             <button type="submit" aria-label="Go to tick">Go</button>
           </form>
           <button ref={commandTrigger} className="world-os-command-button" type="button" onClick={event => openCommand(event.currentTarget)} aria-label="Open command menu" aria-haspopup="dialog">
-            <Glyph name="search" /><span>Navigate</span><kbd>Ctrl K</kbd>
+            <Glyph name="search" /><span>Search</span><kbd>Ctrl K</kbd>
           </button>
           {/*
             * One condition, one place. The shell used to say "stale" three times in
@@ -362,6 +344,7 @@ export function WorkspaceShell() {
             placement="global"
           />
         </div>
+        {runId && tick === "live" && <CityRunControls runId={runId} stale={transport.status !== "live"} />}
       </header>
       {/*
         * The one thing the disclosure above cannot do: interrupt.

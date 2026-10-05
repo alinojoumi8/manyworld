@@ -1,3 +1,4 @@
+import {activityFrame} from "./fixtures/activity";
 import { expect, test, type Page } from "@playwright/test";
 
 const baseEnvelope = {
@@ -45,6 +46,7 @@ async function mockCommonApis(page: Page, options: {
   mapAgents?: Array<Record<string, unknown>>;
   agentsError?: boolean;
 } = {}) {
+  await page.route("**/api/participant",route=>route.fulfill({json:{enabled:false,active:false}}));
   const status = options.status ?? "running";
   const cityAgents = options.agents ?? agents;
   const mapAgents = options.mapAgents ?? cityAgents.map(agent => ({
@@ -54,9 +56,13 @@ async function mockCommonApis(page: Page, options: {
   await page.route("**/api/v2/**", async route => {
     const requestUrl = new URL(route.request().url());
     const path = requestUrl.pathname;
+    const requestedTick = requestUrl.searchParams.get("tick");
+    const frame = { ...baseEnvelope, fork_id: requestUrl.searchParams.get("fork_id"),
+      tick: requestedTick && requestedTick !== "live" ? Number(requestedTick) : 6 };
+    if (path === "/api/v2/city/activity") return route.fulfill({json:activityFrame(frame,[{id:9,tick:frame.tick,kind:'goods_sale'}])});
     if (path === "/api/v2/snapshot") {
       return route.fulfill({ json: {
-        ...baseEnvelope, projection: "world.snapshot", data: {
+        ...frame, projection: "world.snapshot", data: {
           summary: {
             status, phase: "FINALIZE", active_tick: null,
             agents_alive: cityAgents.length, active_firms: cityAgents.length ? 1 : 0,
@@ -65,7 +71,7 @@ async function mockCommonApis(page: Page, options: {
           communications: { total: 0, published: 0, private_total: 0 },
           alerts: [],
           events: { items: cityAgents.length ? [{
-            id: 9, tick: 6, phase: "MARKET", kind: "goods_sale", importance: 2,
+            id: 9, tick: frame.tick, phase: "MARKET", kind: "goods_sale", importance: 2,
             payload: { buyer_id: 1, qty: 5 },
           }] : [] },
         },
@@ -84,7 +90,7 @@ async function mockCommonApis(page: Page, options: {
         return route.fulfill({ status: 503, json: { detail: "world map offline" } });
       }
       return route.fulfill({ json: {
-        ...baseEnvelope, projection: "world.map", data: {
+        ...frame, projection: "world.map", data: {
           regions: [],
           agents: mapAgents,
           organizations: cityAgents.length
@@ -97,14 +103,14 @@ async function mockCommonApis(page: Page, options: {
     }
     if (path === "/api/v2/civic/summary") {
       return route.fulfill({ json: {
-        ...baseEnvelope, projection: "civic.summary", data: {
-          enabled: false, tick: 6, queue: { depth: 0, oldest_age_ticks: 0 }, offices: [],
+        ...frame, projection: "civic.summary", data: {
+          enabled: false, tick: frame.tick, queue: { depth: 0, oldest_age_ticks: 0 }, offices: [],
         },
       } });
     }
     if (path === "/api/v2/workspaces/world") {
       return route.fulfill({ json: {
-        ...baseEnvelope, tick: requestUrl.searchParams.get("tick") === "4" ? 4 : 6,
+        ...frame,
         projection: "workspace.world", data: {
           enabled: true, regions: [], agents: mapAgents, organizations: [], places: [], presence: [], flows: [],
         },
@@ -117,6 +123,8 @@ async function mockCommonApis(page: Page, options: {
     if (path === "/api/v2/operator/investigations") {
       return route.fulfill({ json: { items: [] } });
     }
+    if(path==='/api/v2/urban-development')return route.fulfill({json:{...baseEnvelope,projection:'urban.development',data:{enabled:false}}});
+    if(path==='/api/v2/city/news'||path==='/api/v2/city/conversations')return route.fulfill({json:{...baseEnvelope,projection:path.endsWith('news')?'city.news':'city.conversations',data:{tick:baseEnvelope.tick,items:[],next_before_id:null}}});
     return route.fulfill({ status: 404, json: { detail: "not mocked" } });
   });
 
@@ -130,6 +138,7 @@ async function mockCommonApis(page: Page, options: {
     { id: 1, name: "Northstar Foods", sector: "food", status: "private", employees: 1 },
   ] : [] }));
   await page.route("**/api/llm/runtime", route => route.fulfill({ json: {
+    context: { run_id: "run-demo", fork_id: null, tick: "live" },
     live_only: true,
     global: { capacity: 3, in_flight: 0, queue_depth: 0, peak_in_flight: 0, peak_queue_depth: 0, logical_deadline_s: 90 },
     simulated_days: { samples: 0, p50_wall_ms: null, p95_wall_ms: null },
@@ -152,7 +161,8 @@ test("live city failed status is truthful", async ({ page }) => {
   await mockCommonApis(page, { status: "failed" });
   await page.goto("/runs/run-demo/world");
   await expect(page.getByText("Run failed", { exact: true })).toBeVisible();
-  await expect(page.getByText("Final inference fabric", { exact: true })).toBeVisible();
+  await page.getByText("Provider diagnostics",{exact:true}).click();
+  await expect(page.getByText("This run has ended. Current provider activity is unavailable.")).toBeVisible();
   await expect(page.locator(".civic-city__weather-sweep")).toHaveCount(0);
   await expect(page.locator(".civic-city__instruments > div").filter({ hasText: "World time" }).locator(".civic-city__instrument-value")).toHaveText("Current");
 });
@@ -160,15 +170,19 @@ test("live city failed status is truthful", async ({ page }) => {
 test("historical tick preserves run identity and label", async ({ page }) => {
   await installSocket(page, "running");
   await mockCommonApis(page, { status: "running" });
+  const runtimeRequests: string[] = [];
+  page.on("request", request => { if (request.url().includes("/api/llm/runtime")) runtimeRequests.push(request.url()); });
   await page.goto("/runs/run-demo/world?tick=4");
   await expect(page.getByText("Historical tick 4", { exact: true })).toBeVisible();
-  await expect(page.getByText("Current inference fabric", { exact: true })).toBeVisible();
+  await page.getByText("Provider diagnostics",{exact:true}).click();
   await expect(page.getByText(
-    "Provider capacity is current runtime telemetry, not a historical reconstruction.",
+    "Current provider activity is unavailable in historical views.",
     { exact: true },
   )).toBeVisible();
   await expect(page.locator(".civic-city__weather-sweep")).toHaveCount(0);
   await expect(page).toHaveURL(/\/runs\/run-demo\/world\?tick=4/);
+  expect(runtimeRequests).toEqual([]);
+  await expect(page.getByRole("heading", { name: "Provider lanes" })).toHaveCount(0);
 });
 
 test("empty city invents no agents", async ({ page }) => {
@@ -187,11 +201,79 @@ test("API error city invents no agents", async ({ page }) => {
   await expect(page.locator(".civic-city__agent")).toHaveCount(0);
 });
 
+test("live city pins supporting evidence to the map tick", async ({ page }) => {
+  await installSocket(page);
+  await mockCommonApis(page);
+  const cityRequests: URL[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v2/civic/summary" || (url.pathname === "/api/v2/snapshot"
+      && url.searchParams.get("domains") === "summary")) cityRequests.push(url);
+  });
+  await page.route("**/api/v2/world-map?*", route => route.fulfill({ json: {
+    ...baseEnvelope, tick: 12, projection: "world.map", data: {
+      agents: [{ ...agents[0], place_id:1,x: 0.2, y: 0.3 }], organizations: [], places: [], presence: [],
+    },
+  } }));
+  await page.goto("/runs/run-demo/world");
+  await expect(page.locator(".civic-city__agent")).toHaveCount(1);
+  expect(cityRequests.length).toBeGreaterThanOrEqual(2);
+  expect(cityRequests.every(url => url.searchParams.get("tick") === "12")).toBe(true);
+});
+
+for (const mismatch of ["map run", "civic tick"] as const) {
+  test(`city rejects mismatched ${mismatch} without releasing live telemetry`, async ({ page }) => {
+    await installSocket(page);
+    await mockCommonApis(page);
+    const runtimeRequests: string[] = [];
+    page.on("request", request => { if (request.url().includes("/api/llm/runtime")) runtimeRequests.push(request.url()); });
+    await page.route(mismatch === "map run" ? "**/api/v2/world-map?*" : "**/api/v2/civic/summary?*", route => route.fulfill({ json: {
+      ...baseEnvelope, run_id: mismatch === "map run" ? "foreign-run" : "run-demo",
+      tick: mismatch === "civic tick" ? 9 : 6,
+      projection: mismatch === "map run" ? "world.map" : "civic.summary",
+      data: { tick: 9, agents: [{ id: 999, name: "Foreign city canary", place_id:1,x: 0.2, y: 0.3 }] },
+    } }));
+    await page.goto("/runs/run-demo/world");
+    await expect(page.getByText("City evidence is temporarily unavailable.")).toBeVisible();
+    await expect(page.locator(".civic-city__agent")).toHaveCount(0);
+    await expect(page.getByText("Foreign city canary")).toHaveCount(0);
+    expect(runtimeRequests).toEqual([]);
+  });
+}
+
+test("foreign runtime is withheld and terminal state removes cached activity", async ({ page }) => {
+  await installSocket(page);
+  await mockCommonApis(page);
+  let foreign = true;
+  let ended = false;
+  await page.route("**/api/llm/runtime", route => route.fulfill({ json: {
+    context: { run_id: "run-demo", fork_id: foreign ? "foreign-fork" : null, tick: "live" },
+    live_only: true, active_agents: [{ agent_id: 2, state: "thinking", active_calls: 1, tick: 6 }],
+    global: { capacity: 1, in_flight: 1, queue_depth: 0, peak_in_flight: 1 }, providers: [],
+  } }));
+  await page.route("**/api/v2/snapshot?*", route => route.fulfill({ json: {
+    ...baseEnvelope, projection: "world.snapshot", data: {
+      summary: { status: ended ? "completed" : "running", phase: "FINALIZE", agents_alive: 3 },
+      events: { items: [] }, communications: {}, alerts: [],
+    },
+  } }));
+  await page.goto("/runs/run-demo/world");
+  await page.getByText("Provider diagnostics",{exact:true}).click();
+  await expect(page.getByText("Runtime telemetry does not match this city's run and fork context.")).toBeVisible();
+  await expect(page.locator(".civic-city__agent.is-thinking")).toHaveCount(0);
+  foreign = false;
+  await expect(page.locator(".civic-city__agent.is-thinking")).toHaveCount(1);
+  ended = true;
+  await expect(page.getByText("This run has ended. Current provider activity is unavailable.")).toBeVisible();
+  await expect(page.locator(".civic-city__agent.is-thinking")).toHaveCount(0);
+  await expect(page.getByText("Runtime telemetry does not match this city's run and fork context.")).toHaveCount(0);
+});
+
 test("mixed provenance, search clear, and navigation preserve selection", async ({ page }) => {
   await installSocket(page, "running");
   await mockCommonApis(page, {
     mapAgents: [
-      { id: 1, name: "Supplier Officer", role: "supplier_officer", occupation: "trader", x: 0.2, y: 0.3 },
+      { id: 1, name: "Supplier Officer", role: "supplier_officer", occupation: "trader", place_id:1,x: 0.2, y: 0.3 },
       { id: 2, name: "Editor Northstar", role: "editor", occupation: "editor", x: null, y: null },
       { id: 3, name: "Dr. Amara Osei", role: null, occupation: "doctor", x: 0.8, y: 0.7 },
     ],
@@ -202,6 +284,7 @@ test("mixed provenance, search clear, and navigation preserve selection", async 
   await expect(page.locator(".civic-city__weather-sweep")).toHaveCount(0);
   await expect(page.locator(".civic-city__instruments > div").filter({ hasText: "World time" }).locator(".civic-city__instrument-value")).toHaveText("Live");
 
+  await page.getByText("Layers and agent filters", { exact: true }).click();
   await page.getByLabel("Find an agent").fill("zzz-no-match");
   await expect(page.locator(".civic-city__agent")).toHaveCount(0);
   await page.getByRole("button", { name: "Reset city view" }).click();
@@ -210,8 +293,8 @@ test("mixed provenance, search clear, and navigation preserve selection", async 
   await page.goto("/runs/run-demo/world?tick=4");
   await page.getByRole("button", { name: "Open command menu" }).click();
   const command = page.getByRole("dialog", { name: "Navigate and inspect" });
-  await command.getByPlaceholder("Search routes, people, firms, events…").fill("City evidence");
-  await command.getByRole("option", { name: /^City evidence/ }).click();
+  await command.getByPlaceholder("Search routes, people, firms, events…").fill("City");
+  await command.getByRole("option", { name: /^City / }).click();
   await expect(page).toHaveURL(/\/runs\/run-demo\/world\?tick=4/);
 });
 
@@ -224,7 +307,7 @@ test("Diorama shares place and agent evidence through browser history", async ({
     projection: "world.map",
     data: {
       regions: [
-        { id: 1, name: "North", x: 0.2, y: 0.3 },
+        { id: 1, name: "North", place_id:1,x: 0.2, y: 0.3 },
         { id: 2, name: "South", x: 0.8, y: 0.7 },
       ],
       agents: [
