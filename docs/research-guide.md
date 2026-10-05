@@ -2,7 +2,7 @@
 
 ## What this app is for
 
-Agent Economy is an instrument for studying how information, beliefs, and
+Manyworld is an instrument for studying how information, beliefs, and
 institutional decisions interact inside a mechanically consistent miniature
 economy. It is useful for:
 

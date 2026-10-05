@@ -22,6 +22,7 @@ from engine.legal import DECISION_ROLES
 from engine.store import load_json
 from communications.projections import AgentKnowledgeProjection
 from engine.types import positive_integer_id
+from llm.decision_config import POLICY_VERSION_V3, POLICY_VERSION_V4
 from world.recovery import assess_recovery, recovery_settings
 from .memory import Memory
 from .numeric_grounding import model_grounding_active
@@ -386,6 +387,9 @@ class ContextBuilder:
             if opportunity is not None:
                 ctx["scripted_communication_action"] = opportunity
             self._add_supplier_warning_policy_input(ctx, agent_row, tick)
+        frontier = self.e.frontier.context(int(agent_row["id"]), tick)
+        if frontier is not None:
+            ctx["frontier"] = frontier
         if self.engine_semantics_version >= 11:
             ctx.update(self.e.cognition.decision_context(int(agent_row["id"]), tick))
         if self.engine_semantics_version >= 12 and self.e.city.enabled:
@@ -443,6 +447,11 @@ class ContextBuilder:
                 # Legal duties follow the official even when business control
                 # selects the founder purpose or role-specific purposes are off.
                 ctx["institutional_work"] = self._institutional_work(agent_row, tick)
+        if self.e.ballots.active(tick):
+            ctx["election_work"] = self.e.ballots.context(int(agent_row["id"]), tick)
+        if (self.config.get("llm", {}).get("decision_policy") or {}).get("version") == POLICY_VERSION_V4:
+            from .domain_observations import enrich_decision_context
+            enrich_decision_context(self, agent_row, tick, ctx)
         return ctx
 
     def _goal_driven_communication_action(
@@ -683,6 +692,17 @@ class ContextBuilder:
             "portfolio_day": portfolio_day,
             "career_day": career_day,
         }
+        policy = self.config.get("llm", {}).get("decision_policy") or {}
+        if policy.get("version") in {POLICY_VERSION_V3, POLICY_VERSION_V4}:
+            # Own active applications only, bounded to the already visible jobs.
+            # Historical policies keep their original observation hashes.
+            visible_jobs = [job["job_id"] for job in context["jobs"]]
+            marks = ",".join("?" for _ in visible_jobs)
+            context["pending_job_ids"] = [int(row["job_id"]) for row in self.store.query(
+                "SELECT DISTINCT job_id FROM applications WHERE agent_id=? "
+                "AND state IN ('pending','negotiating') "
+                f"AND job_id IN ({marks}) ORDER BY job_id",
+                (agent_id, *visible_jobs))] if visible_jobs else []
         if recovery_settings_at_tick is not None:
             context["supply_recovery"] = {"active": True}
         if self.engine_semantics_version >= 7:
@@ -855,7 +875,7 @@ class ContextBuilder:
                 "rule": "copy at most one supplied action exactly"}
 
     def _entrepreneurship_opportunity(
-        self, agent_row, tick: int, context: dict,
+        self, agent_row, tick: int, context: dict, *, candidate_sector: str | None = None,
     ) -> Optional[dict]:
         """Return one deterministic, fully bounded native incorporation option."""
         settings = self.config.get("entrepreneurship", {})
@@ -1023,6 +1043,8 @@ class ContextBuilder:
                         and (facts["recent_sales"] > 0
                              or facts["low_stock_firms"] > 0))):
                 candidates.append((sector, facts))
+        if candidate_sector is not None:
+            candidates = [item for item in candidates if item[0] == candidate_sector]
         if not candidates:
             return None
         sector, facts = min(
@@ -1443,6 +1465,7 @@ class ContextBuilder:
         return work
 
     def _legislative_work(self, agent_id: int, work: dict) -> None:
+        recorded = self.e.ballots.active(int(self.store.get_meta()["active_tick"] or self.store.tick))
         legislator = self.store.query_one(
             "SELECT l.id,l.chamber,l.seat_number,l.party_id FROM legislators l "
             "WHERE l.agent_id=? AND l.active=1", (agent_id,))
@@ -1472,6 +1495,9 @@ class ContextBuilder:
                 })
             return
 
+        if recorded:
+            work["voting_contract"] = "recorded-voting-v1"
+            return
         bill = next((row for row in reversed(bills)
                      if row["status"] in {"committee", "floor_house", "floor_senate"}), None)
         if bill is None:
@@ -2353,6 +2379,9 @@ class ContextBuilder:
             lines.append(
                 "[COMPUTE PLAN] "
                 + json.dumps(context["compute_plan"], separators=(",", ":")))
+        if context.get("frontier"):
+            lines.append("[FRONTIER - COPY AVAILABLE ACTIONS; YOU MAY CHOOSE A UNIQUE SETTLEMENT NAME] "
+                         + json.dumps(context["frontier"], separators=(",", ":")))
         if context.get("skills"):
             lines.append(
                 "[LEARNED SKILLS - LEVELS 0 TO 5; XP IS ENGINE-AUTHORITATIVE] "
@@ -2733,6 +2762,13 @@ class ContextBuilder:
             system += (SEMANTICS7_INSTITUTIONAL_ACTIONS_SUFFIX
                        if getattr(self, "engine_semantics_version", 2) >= 7
                        else INSTITUTIONAL_ACTIONS_SUFFIX)
+        if context.get("frontier"):
+            system += ("\nFrontier actions are available only as supplied in frontier.options. "
+                       "Copy one action exactly; for found_settlement you may choose a unique name. "
+                       "Submit at most one frontier action this turn. If frontier.task is pending, "
+                       "submit only do_nothing until completion. Exploration reveals land; "
+                       "construction requires three completed work units, then residents may move "
+                       "and vote to charter a region. Supplies are consumed and cannot be refunded.")
         if context.get("startup_work"):
             system += STARTUP_ACTIONS_SUFFIX
         if getattr(self, "engine_semantics_version", 2) >= 6:

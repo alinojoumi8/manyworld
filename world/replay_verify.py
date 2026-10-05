@@ -59,7 +59,7 @@ IGNORED_EVENT_KINDS = {
     # executed submission row that binds the action to its world effects.
     "external_action_queued", "external_action_stale", "external_action_rejected",
 }
-OPERATIONAL_LLM_PURPOSES = {"report_narrative"}
+OPERATIONAL_LLM_PURPOSES = {"report_narrative", "hermes_selection", "commons_selection"}
 JSON_COLUMNS = {
     "participant_ids", "slant_tags", "source_event_ids",
 }
@@ -188,6 +188,14 @@ SEMANTIC_EXTENSIONS = ((17, 22, HOUSEHOLD_DECISION_TABLES), (18, 23, DAILY_TIME_
                        (19, 24, ESTATE_CASH_TABLES), (20, 25, ASSET_SUCCESSION_TABLES),
                        (21, 26, POPULATION_TABLES))
 URBAN_TABLES = {"urban_parcels", "urban_construction_projects", "urban_construction_receipts", "urban_projection_history"}
+FRONTIER_TABLES = {"frontier_sites", "frontier_settlements", "frontier_residences",
+                   "frontier_tasks", "frontier_votes", "frontier_history"}
+
+
+def _frontier_enabled(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT config_json FROM run_meta WHERE id=1").fetchone()
+    config = json.loads(row[0]) if row else {}
+    return config.get("frontier", {}).get("version") == 1
 
 
 def _urban_enabled(conn: sqlite3.Connection) -> bool:
@@ -210,6 +218,9 @@ def _tables(conn: sqlite3.Connection) -> list[str]:
     names = [str(row[0]) for row in rows if str(row[0]) not in EXCLUDED_TABLES]
     if not _urban_enabled(conn):
         names = [name for name in names if name not in URBAN_TABLES
+                 or conn.execute(f'SELECT 1 FROM "{name}" LIMIT 1').fetchone() is not None]
+    if not _frontier_enabled(conn):
+        names = [name for name in names if name not in FRONTIER_TABLES
                  or conn.execute(f'SELECT 1 FROM "{name}" LIMIT 1').fetchone() is not None]
     for semantics, _, tables in SEMANTIC_EXTENSIONS:
         if _engine_semantics(conn) >= semantics:
@@ -527,7 +538,29 @@ def _event_llm_expectations(
             purpose=_action_purposes_for(conn, owner_id, int(event_row["tick"]), role))
         return expectations, valid and _engine_semantics(conn) == 7
 
-    if key == "source_llm_call_id" and "agent_id" in root:
+    if key == "model_call_id" and str(event_row["kind"]) == "typed_decision":
+        owner_id = root.get("agent_id")
+        if (type(owner_id) is not int or event_row["phase"] != "EXECUTION"
+                or event_row["subject_type"] != "agent" or event_row["subject_id"] != owner_id
+                or root.get("contract") not in {"bounded-economic-choice-v1", "bounded-economic-choice-v2",
+                                               "bounded-economic-choice-v3", "bounded-economic-choice-v4"}):
+            return expectations, False
+        role, valid = _agent_role(conn, owner_id, tick=int(event_row["tick"]))
+        purpose = str(root.get("purpose") or "")
+        valid = valid and (purpose in _action_purposes_for(conn, owner_id, int(event_row["tick"]), role)
+            if root.get("contract") == "bounded-economic-choice-v4" else purpose == "decision")
+    elif key == "model_call_id" and str(event_row["kind"]) == "bounded_selection":
+        from agents.selection_services import PURPOSES
+        service = root.get("service")
+        owner_id = root.get("agent_id")
+        valid = (root.get("contract") == "bounded-selection-v1" and
+            service in {"attention", "newsroom", "oracle_tools", "oracle_forecast"} and
+            event_row["phase"] == "DECISION_SERVICE" and root.get("controller") == "native" and
+            event_row["subject_id"] == owner_id and
+            (type(owner_id) is int or owner_id is None and service in {"oracle_tools", "oracle_forecast"}))
+        expectations["agent_id"] = owner_id
+        role, purpose = service, PURPOSES.get(service)
+    elif key == "source_llm_call_id" and "agent_id" in root:
         try:
             owner_id = int(root["agent_id"])
         except (TypeError, ValueError):
@@ -592,7 +625,8 @@ def _logical_event_references(
         # event, so an incremental index resolves the logical identity without
         # depending on this database's physical event IDs.
         payload, _valid = _canonicalize_nested_event_references(
-            payload, references)
+            payload, references, extra_keys=(frozenset({"source_event_id", "outcome_event_id"})
+                if isinstance(payload, dict) and payload.get("contract") == "bounded-economic-choice-v4" else frozenset()))
         references[int(row["id"])] = {"event": {
             "tick": int(row["tick"]),
             "kind": str(row["kind"]),
@@ -758,6 +792,12 @@ def _table_digest(
     all_columns = [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')]
     ignored = (IGNORED_COLUMNS | SURROGATE_ID_COLUMNS.get(table, set())
                | TABLE_IGNORED_COLUMNS.get(table, set()))
+    # Migration 28 gives historical regions a zero default. Omit only that
+    # unused extension; nonzero dates and enabled frontier worlds remain exact.
+    if (table == "regions" and "created_tick" in all_columns
+            and not _frontier_enabled(conn)
+            and conn.execute("SELECT 1 FROM regions WHERE created_tick<>0 LIMIT 1").fetchone() is None):
+        ignored = ignored | {"created_tick"}
     columns = [column for column in all_columns if column not in ignored]
     where = ""
     params: tuple[Any, ...] = ()
@@ -777,6 +817,8 @@ def _table_digest(
         omitted = [str(version) for semantics, version, _ in SEMANTIC_EXTENSIONS if _engine_semantics(conn) < semantics]
         if not _urban_enabled(conn):
             omitted.append("27")
+        if not _frontier_enabled(conn):
+            omitted.append("28")
         where = " WHERE version NOT IN (" + ",".join(omitted) + ")" if omitted else ""
     order = " ORDER BY id" if "id" in all_columns else ""
     selected = ",".join(f'"{column}"' for column in columns)
@@ -842,7 +884,9 @@ def _table_digest(
                 if (table, column) in NESTED_EVENT_REFERENCE_JSON_COLUMNS:
                     value, valid = _canonicalize_nested_event_references(
                         value, event_references, extra_keys=(frozenset({"outcome_event_id"})
-                            if table == "urban_projection_history" else frozenset()))
+                            if table == "urban_projection_history" else
+                            frozenset({"source_event_id", "outcome_event_id"}) if table == "events" and
+                            isinstance(value, dict) and value.get("contract") == "bounded-economic-choice-v4" else frozenset()))
                     references_valid = references_valid and valid
                 record[column] = value
         encoded = storage.encode(record, exact=True)
