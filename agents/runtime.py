@@ -15,6 +15,8 @@ from typing import NamedTuple, Optional
 
 from engine.actions import ActionExecutor
 from engine.core import Economy
+from engine.keyed_random import policy_seed
+from engine.local_participation import is_local
 from engine.store import load_json
 from engine.types import positive_integer_id
 from causal import CausalLinkService
@@ -50,6 +52,8 @@ from .policies import (
 from .scheduler import Scheduler
 from .participant import ParticipantService
 from .external import ExternalAgentService
+from .decision_candidates import DecisionMenu
+from .typed_policy import TypedDecisionPolicy, record_execution_receipt
 from observability import get_logger, log_event as operational_log
 
 
@@ -72,6 +76,7 @@ class PreparedDecision(NamedTuple):
     scripted_envelope: dict | None
     attention_context_key: str
     attention_source_event_ids: list[int]
+    typed_menu: DecisionMenu | None = None
 
 
 def _decision_output_budget(llm_config: dict, purpose: str) -> int:
@@ -86,7 +91,7 @@ def _decision_numeric_sources(context: dict) -> dict:
     """Expose only the current authoritative sections named by the prompt contract."""
     return {
         key: context[key]
-        for key in ("state", "metrics", "banks", "prices", "jobs", "my_firm")
+        for key in ("state", "metrics", "banks", "prices", "jobs", "my_firm", "estate_securities", "estate_property_market", "estate_unlisted_market")
         if key in context
     }
 
@@ -237,6 +242,7 @@ class AgentRuntime:
         self.scheduler = Scheduler(self.store, config)
         register_scripted_policies(self.gw.scripted)
         self.gw.scripted.register("persona", scripted_persona_enrichment)
+        self.typed_policy = TypedDecisionPolicy(gateway, config)
 
     async def enrich_pending_arrivals(self, tick: int) -> None:
         """Run each semantics-7 arrival's one governed persona enrichment call.
@@ -262,6 +268,10 @@ class AgentRuntime:
             self.config.get("outlets", [{"id": 1}, {"id": 2}]))
         for agent in arrivals:
             agent_id = int(agent["id"])
+            if int(self.config.get("engine_semantics_version", 1)) >= 15:
+                origin = self.store.scalar("SELECT origin FROM person_lifecycle WHERE agent_id=?", (agent_id,))
+                if origin != "arrival" or int(agent["age"]) < 18:
+                    continue
             system, user, context = persona_request(agent, outlet_ids)
             request = LLMRequest(
                 role="persona",
@@ -328,8 +338,18 @@ class AgentRuntime:
     # ── MORNING: decide (concurrent) ─────────────────────────────────────────
     async def decide_all(self, tick: int) -> list[dict]:
         gov = self.gw.governor
+        cadence = max(1, gov.cadence_multiplier())
+        citizens_enabled = gov.citizens_enabled()
         agents = self.scheduler.scheduled_agents(
-            tick, cadence_multiplier=gov.cadence_multiplier(), citizens_enabled=gov.citizens_enabled())
+            tick, cadence_multiplier=cadence, citizens_enabled=citizens_enabled)
+        if self.e.ballots.active(tick) and citizens_enabled:
+            by_id = {int(a["id"]): a for a in agents}
+            for aid in self.e.ballots.pending_actors(tick):
+                # Ballot wakes cannot undo governor throttling. Stable phases
+                # preserve replay and leave undispatched voters as nonvotes.
+                if aid not in by_id and aid % cadence == tick % cadence:
+                    by_id[aid] = self.store.query_one("SELECT * FROM agents WHERE id=?", (aid,))
+            agents = [by_id[aid] for aid in sorted(by_id)]
         self.ctx.prepare_decision_cohort(agents, tick)
         participant_decision = self.participant.decision_for_tick(tick)
         external_agent_ids, external_decisions = self.external.decisions_for_tick(tick)
@@ -373,6 +393,11 @@ class AgentRuntime:
                                 error_type=type(res).__name__, error=str(res))
                 continue
             if res is not None:
+                # Parallel provider completion must not reorder the event spine.
+                # Prepared context effects precede service receipts in actor order.
+                from .selection_services import SelectionService
+                for receipt in res.pop("selection_receipts", []):
+                    SelectionService(self.gw, self.config).record_receipt(receipt)
                 decisions.append(res)
         if participant_decision is not None:
             self._attach_civic_decision_context(tick, participant_decision)
@@ -430,10 +455,12 @@ class AgentRuntime:
         eligible_founders = {
             int(row["founder_agent_id"])
             for row in self.store.query(
-                "SELECT founder_agent_id,sector FROM firms "
-                "WHERE founder_agent_id IS NOT NULL "
-                "AND status IN ('private','listed') ORDER BY founder_agent_id")
+                f"SELECT {self.e.business_control.column} AS founder_agent_id,sector FROM {self.e.business_control.table} "
+                f"WHERE {self.e.business_control.column} IS NOT NULL "
+                f"AND status IN ('private','listed') ORDER BY {self.e.business_control.column}")
             if str(row["sector"] or "").strip().lower() not in excluded_sectors
+            and (self.e.engine_semantics_version < 21
+                 or self.e.population.is_local(int(row["founder_agent_id"]), tick))
         }
         controlled_types = {
             "post_job",
@@ -507,9 +534,12 @@ class AgentRuntime:
         recovery: list[dict] = []
         firms = self.store.query(
             "SELECT a.*,f.id AS recovery_firm_id,f.sector AS recovery_sector "
-            "FROM firms f JOIN agents a ON a.id=f.founder_agent_id "
+            f"FROM {self.e.business_control.table} f JOIN agents a ON a.id=f.{self.e.business_control.column} "
             "WHERE f.status IN ('private','listed') AND a.alive=1 "
             "ORDER BY f.id")
+        if self.e.engine_semantics_version >= 21:
+            firms = [firm for firm in firms
+                     if self.e.population.is_local(int(firm["id"]), tick)]
         for founder in firms:
             agent_id = int(founder["id"])
             firm_id = int(founder["recovery_firm_id"])
@@ -581,8 +611,9 @@ class AgentRuntime:
         return int(row["firm_id"]) if row else None
 
     def _consume_accept_slots(
-            self, decisions: list[dict], slots: dict[int, int]) -> None:
+            self, decisions: list[dict], slots: dict[int, int], *, tick: int) -> None:
         """Debit firm hiring slots for already-planned accept_job_offer actions."""
+        remaining = dict(slots)
         for decision in decisions:
             envelope = decision.get("envelope") or {}
             actions = envelope.get("actions", []) if isinstance(
@@ -598,10 +629,28 @@ class AgentRuntime:
                 offer_id = positive_integer_id(action.get("offer_id"))
                 if offer_id is None:
                     continue
-                firm_id = self._offer_firm_id(offer_id)
-                if firm_id is None or firm_id not in slots:
+                if self.e.engine_semantics_version >= 21:
+                    actor_id = positive_integer_id(decision.get("agent_id"))
+                    if actor_id is None:
+                        continue
+                    actor_local = self.e.population.is_local(actor_id, tick)
+                    offer = self.store.query_one(
+                        "SELECT j.firm_id,ap.agent_id FROM job_offers jo "
+                        "JOIN applications ap ON ap.id=jo.application_id "
+                        "JOIN jobs j ON j.id=ap.job_id WHERE jo.id=?", (offer_id,))
+                    if offer is None:
+                        continue
+                    candidate_local = self.e.population.is_local(int(offer["agent_id"]), tick)
+                    if not actor_local or not candidate_local:
+                        continue
+                    firm_id = int(offer["firm_id"])
+                else:
+                    firm_id = self._offer_firm_id(offer_id)
+                if firm_id is None or firm_id not in remaining:
                     continue
-                slots[firm_id] = max(0, slots[firm_id] - 1)
+                remaining[firm_id] = max(0, remaining[firm_id] - 1)
+        # Resolve every referenced actor before publishing a reservation batch.
+        slots.update(remaining)
 
     def _select_offers_within_firm_slots(
             self, offers: list[dict], slots: dict[int, int]) -> list[dict]:
@@ -645,7 +694,7 @@ class AgentRuntime:
         slots = self._workforce_recovery_firm_slots(tick)
         # Firm recovery decisions are already in existing_decisions and must
         # share the same headcount budget as candidate auto-accepts.
-        self._consume_accept_slots(existing_decisions, slots)
+        self._consume_accept_slots(existing_decisions, slots, tick=tick)
         eligible_offers: list[dict] = []
         rows = self.store.query(
             "SELECT jo.id AS offer_id,jo.wage_cents AS offered_wage,"
@@ -666,6 +715,9 @@ class AgentRuntime:
             "ORDER BY ap.agent_id,jo.wage_cents DESC,jo.id")
         for offer in rows:
             candidate_id = int(offer["candidate_agent_id"])
+            if (self.e.engine_semantics_version >= 21
+                    and not self.e.population.is_local(candidate_id, tick)):
+                continue
             firm_id = int(offer["firm_id"])
             if (
                 candidate_id in already_scheduled
@@ -785,6 +837,8 @@ class AgentRuntime:
                     and offer["job_status"] == "open"
                     and offer["firm_status"] in ("private", "listed")
                     and bool(offer["alive"])
+                    and (self.e.engine_semantics_version < 21
+                         or self.e.population.is_local(candidate_id, tick))
                     and not bool(offer["retired"])
                     and not bool(offer["employed"])
                     and int(offer["offered_wage"]) >= int(offer["posted_wage"])
@@ -812,27 +866,11 @@ class AgentRuntime:
         # Share the remaining headcount budget with firm-side recovery accepts
         # already present on founder decisions (not candidate-controlled).
         slots = self._workforce_recovery_firm_slots(tick)
-        for decision in decisions:
-            agent_id = int(decision["agent_id"])
-            if agent_id in controlled_by_agent:
-                continue
-            envelope = decision.get("envelope") or {}
-            actions = envelope.get("actions", []) if isinstance(
-                envelope, dict) else []
-            if not isinstance(actions, list):
-                continue
-            for action in actions:
-                if not (
-                    isinstance(action, dict)
-                    and action.get("type") == "accept_job_offer"
-                ):
-                    continue
-                offer_id = positive_integer_id(action.get("offer_id"))
-                if offer_id is None:
-                    continue
-                firm_id = self._offer_firm_id(offer_id)
-                if firm_id is not None and firm_id in slots:
-                    slots[firm_id] = max(0, slots[firm_id] - 1)
+        self._consume_accept_slots(
+            [decision for decision in decisions
+             if int(decision["agent_id"]) not in controlled_by_agent],
+            slots, tick=tick,
+        )
         for offer in eligible:
             firm_id = self._offer_firm_id(int(offer["offer_id"]))
             if firm_id is not None:
@@ -890,6 +928,11 @@ class AgentRuntime:
         agent = self.store.query_one(
             "SELECT * FROM agents WHERE id=? AND alive=1", (agent_id,))
         if agent is None:
+            return
+        if int(self.config.get("engine_semantics_version", 1)) >= 21 and (
+                int(agent['age']) < 18 or not self.e.population.is_local(agent_id, tick)):
+            # Outside controls can submit return commands without doing local
+            # memory work or recording attention in the city they have left.
             return
         context = self.ctx.build(agent, tick)
         purpose = str(decision.get("purpose") or context.get("purpose") or "decision")
@@ -1028,6 +1071,7 @@ class AgentRuntime:
             scripted_envelope=None,
             attention_context_key=attention_context_key,
             attention_source_event_ids=attention_source_event_ids,
+            typed_menu=self.typed_policy.prepare(context, tick),
         )
 
     async def _complete_prepared_decision(
@@ -1053,8 +1097,25 @@ class AgentRuntime:
 
         if prepared.request is None:
             raise RuntimeError("prepared model decision has no request")
-        resp = await self.gw.complete(prepared.request)
-        env = dict(resp.parsed) if isinstance(resp.parsed, dict) else {}
+        from .selection_services import SelectionService
+        selector = SelectionService(self.gw, self.config)
+        selection_receipts = []
+        if selector.enabled("attention", prepared.request.tick) and context.get("memories"):
+            from dataclasses import replace
+            memories, receipt = await selector.rank_attention(
+                prepared.agent_id, prepared.request.tick, context["memories"],
+                goals=context.get("decision_goals", context.get("beliefs", {})), record_event=False)
+            if receipt:
+                selection_receipts.append(receipt)
+            context = {**context, "memories": memories}
+            system, user = self.ctx.render_prompt(context)
+            prepared = prepared._replace(context=context,
+                request=replace(prepared.request, context=context, system=system, user=user),
+                typed_menu=self.typed_policy.prepare(context, prepared.request.tick))
+        typed = (await self.typed_policy.complete(prepared.request, prepared.typed_menu)
+                 if prepared.typed_menu is not None else None)
+        resp = typed.response if typed is not None else await self.gw.complete(prepared.request)
+        env = typed.envelope if typed is not None else (dict(resp.parsed) if isinstance(resp.parsed, dict) else {})
         raw_reasoning = str(env.get("reasoning", "")).strip()
         public_reasoning = sanitize_model_numeric_narrative(
             raw_reasoning,
@@ -1065,6 +1126,8 @@ class AgentRuntime:
             ),
             sources=_decision_numeric_sources(context),
         )
+        if typed is not None and typed.suppress_reasoning:
+            public_reasoning = ""
         if raw_reasoning or public_reasoning:
             env["reasoning"] = public_reasoning
         return {
@@ -1074,6 +1137,8 @@ class AgentRuntime:
             "reasoning": public_reasoning,
             "numeric_claims_redacted": public_reasoning != raw_reasoning,
             "llm_call_id": getattr(resp, "call_id", None),
+            **({"typed_receipt": typed.receipt} if typed is not None else {}),
+            "selection_receipts": selection_receipts,
             "communication_sources": context.get("communication_sources", []),
             "communication_read_context_key": context.get(
                 "communication_read_context_key"),
@@ -1470,6 +1535,7 @@ class AgentRuntime:
                 "SELECT COALESCE(MAX(id),0) FROM events", default=0))
             results = self.executor.execute_actions(
                 tick, agent_id, attributed_actions, phase="EXECUTION")
+            record_execution_receipt(self.store, tick, d, results)
             proposals = self.store.query(
                     "SELECT id,payload_json FROM action_proposals WHERE id>? AND tick=? AND actor_id=? "
                     "ORDER BY id",
@@ -1601,6 +1667,12 @@ class AgentRuntime:
         for ev in events:
             payload = load_json(ev["payload_json"], {}) or {}
             kind = ev["kind"]
+            if int(self.config.get("engine_semantics_version", 1)) >= 21 and kind in {
+                "participant_control_acquired", "participant_control_released",
+                "participant_action_queued", "participant_action_replaced", "participant_idle",
+            }:
+                # Controller leases are operational input, never lived memories.
+                continue
             importance = float(ev["importance"])
             # Direct-subject observation.
             if ev["subject_type"] == "agent" and ev["subject_id"]:
@@ -1630,7 +1702,12 @@ class AgentRuntime:
             "goods_sale": "I bought goods.",
             "deposit_move": f"I moved my deposits to bank {payload.get('to_bank')}.",
             "retirement": "I retired.",
-            "birth": "A new dependent joined my household.",
+            "birth": ("I was born." if int(self.config.get("engine_semantics_version", 1)) >= 15
+                      and "birth_key" in payload else "A new dependent joined my household."),
+            "parenthood": f"I became responsible for child {payload.get('child_agent_id')}'s household needs.",
+            "household_child_support": f"Child {payload.get('child_agent_id')} received {payload.get('purchased_units', 0)} food units "
+                f"from my budget for {payload.get('spent_cents', 0)} {payload.get('currency_code', '')} minor units; "
+                f"{payload.get('unmet_units', 0)} units remain unmet.",
             "benefit_paid": "I received an unemployment benefit payment.",
             "policy_bought": "I took out health insurance.",
             "policy_lapsed": "My health insurance lapsed - I couldn't pay the premium.",
@@ -1681,6 +1758,19 @@ class AgentRuntime:
                 "WHERE tick=? AND kind='observation' "
                 "AND agent_id NOT IN (SELECT agent_id FROM memories "
                 "WHERE tick=? AND kind='summary') ORDER BY agent_id", (tick, tick))
+        rollup_every = max(1, int(
+            self.config.get("cognition", {}).get("memory_rollup_every", 7)))
+        eligible = None
+        if self.e.engine_semantics_version >= 21:
+            candidates = {int(row['agent_id']) for row in rows}
+            if tick % rollup_every == 0:
+                candidates.update(int(row['agent_id']) for row in self.store.query(
+                    "SELECT DISTINCT agent_id FROM memories WHERE kind='summary' AND demoted=0 "
+                    "AND tick BETWEEN ? AND ? ORDER BY agent_id", (tick - rollup_every + 1, tick)))
+            # Check the complete daily/weekly cohort before writing a summary
+            # or starting a model task. Raw owner observations stay intact.
+            eligible = {aid: is_local(self.e, aid, tick=tick) for aid in sorted(candidates)}
+            rows = [row for row in rows if eligible[int(row['agent_id'])]]
         # Semantics-v5 uses deterministic daily compression for everyone and a
         # model-capable weekly reflection for the core below. Older semantics
         # retain their daily model path unchanged.
@@ -1714,8 +1804,6 @@ class AgentRuntime:
                 source_llm_call_id=llm_call_id)
             self.mem.write_summary(aid, tick, summary, importance)
 
-        rollup_every = max(1, int(
-            self.config.get("cognition", {}).get("memory_rollup_every", 7)))
         if tick % rollup_every == 0:
             rollup_start = tick - rollup_every + 1
             if living_world:
@@ -1729,6 +1817,12 @@ class AgentRuntime:
                     "SELECT DISTINCT agent_id,NULL AS population_tier FROM memories "
                     "WHERE kind='summary' AND demoted=0 AND tick BETWEEN ? AND ? "
                     "ORDER BY agent_id", (rollup_start, tick))
+            if eligible is not None:
+                weekly_rows = [row for row in weekly_rows if eligible[int(row['agent_id'])]]
+            if int(self.config.get("engine_semantics_version", 1)) >= 15:
+                minors = {int(row["id"]) for row in self.store.query("SELECT id FROM agents WHERE age<18")}
+                weekly_rows = [dict(row, population_tier="periphery") if int(row["agent_id"]) in minors else row
+                               for row in weekly_rows]
             weekly_ids = [
                 int(r["agent_id"]) for r in weekly_rows
                 if not living_world or r["population_tier"] == "core"
@@ -1761,11 +1855,14 @@ class AgentRuntime:
     async def _compress_one(
         self, tick: int, agent_id: int,
     ) -> Optional[tuple[str, float, list[dict], Optional[int]]]:
+        if not is_local(self.e, agent_id, tick=tick):
+            return None
         obs = self.mem.todays_observations(agent_id, tick)
         if not obs:
             return
         context = {"observations": obs, "tick": tick, "rng_seed": agent_id * 7 + tick,
                    "infl_hint": self.ctx.inflation_signal()}
+        context["rng_seed"] = policy_seed(self.e, "policy.daily_memory", tick, agent_id, context["rng_seed"])
         schema = '{"summary":"concise memory","importance":1.0,"belief_updates":[]}'
         req = LLMRequest(
             role="citizen", purpose="memory",
@@ -1804,6 +1901,8 @@ class AgentRuntime:
     async def _rollup_week(
         self, tick: int, agent_id: int, rollup_start: Optional[int] = None,
     ) -> Optional[tuple[str, float]]:
+        if not is_local(self.e, agent_id, tick=tick):
+            return None
         start = tick - 6 if rollup_start is None else int(rollup_start)
         rows = self.store.query(
             "SELECT tick, text, importance FROM memories WHERE agent_id=? "
@@ -1823,6 +1922,7 @@ class AgentRuntime:
         ]
         context = {"weekly_summaries": daily, "tick": tick,
                    "rng_seed": agent_id * 701 + tick}
+        context["rng_seed"] = policy_seed(self.e, "policy.weekly_memory", tick, agent_id, context["rng_seed"])
         schema = '{"summary":"concise weekly memory","importance":1.0}'
         req = LLMRequest(
             role="citizen", purpose="memory",

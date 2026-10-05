@@ -1,7 +1,7 @@
 # World OS specification set
 
 **This directory is not a duplicate of the root specs.** It is the *successor*
-specification: World OS is defined as "an extension of the current Agent Economy
+specification: World OS is defined as "an extension of the current Manyworld
 process, not a replacement runtime". The root documents describe what is built
 and maintained; these describe where that runtime is going, and parts of them
 are deliberately ahead of the code.

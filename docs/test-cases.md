@@ -1,4 +1,4 @@
-# Agent Economy PRD-Traceable Test Catalog
+# Manyworld PRD-Traceable Test Catalog
 
 Stable catalog of automated evidence for PRD requirements R1–R32 and extension contracts
 (Gateway, Commons, cognition, citizenship, Live City). Each entry has a fixed ID.
