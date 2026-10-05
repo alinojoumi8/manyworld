@@ -384,7 +384,7 @@ def _render_report(store: Store, narrative: str, narrative_provenance: dict,
                     f"<th>Observed freq</th></tr>{bin_rows}</table>")
 
     html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Agent Economy — run {esc(run_id)}</title>
+<title>Manyworld — run {esc(run_id)}</title>
 <style>
  body{{font:14px/1.5 Georgia,serif; color:#1c2330; max-width:980px; margin:32px auto; padding:0 18px}}
  h1{{font-size:26px}} h2{{margin-top:28px; border-bottom:2px solid #e3e7ee; padding-bottom:4px}}
@@ -395,7 +395,7 @@ def _render_report(store: Store, narrative: str, narrative_provenance: dict,
  th{{background:#f4f6fa; font-family:sans-serif; font-size:11px; text-transform:uppercase}}
  .narr p{{margin:8px 0}} pre{{background:#f4f6fa; padding:10px; border-radius:6px; overflow-x:auto; font-size:11px}}
 </style></head><body>
-<h1>Agent Economy — End-of-run report</h1>
+<h1>Manyworld — End-of-run report</h1>
 <p class="meta">Run <b>{esc(run_id)}</b> · seed {meta['seed']} · {tick} simulated days · generated {now}</p>
 
 <h2>Narrative</h2>
@@ -435,7 +435,7 @@ vs naive-0.5 baseline {f"{naive_brier:.3f}" if naive_brier is not None else "—
     html_path.write_text(html_doc, encoding="utf-8")
 
     md = [
-        f"# Agent Economy — run {run_id}",
+        f"# Manyworld — run {run_id}",
         f"Seed {meta['seed']} · {tick} days · {now}",
         "",
         "> Reviewer companion. The sibling HTML file is the canonical standalone "

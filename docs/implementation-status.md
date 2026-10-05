@@ -1,4 +1,4 @@
-# Agent Economy — Implementation Status & PRD Gap Assessment
+# Manyworld — Implementation Status & PRD Gap Assessment
 
 > **Current assessment date:** 2026-09-11
 >
@@ -13,6 +13,17 @@
 > **Compatibility boundary:** stored historical runs retain their recorded
 > schema and semantics. Supporting schema 21 / semantics 16 for new runs does
 > not rewrite or upgrade historical evidence.
+
+## City UI consolidation — 2026-09-18
+
+The local entry point is City. Pulse, duplicate primary navigation and the
+2.5D main toggle are retired; evidence dossiers remain available inside City.
+The full-day read-only activity projection, public newsroom/conversation paging,
+shared 3D inspector and explicit capability/failure states are implemented.
+Current-only economic summaries and operator tools remain available separately
+from historical public evidence. The original run is not converted to SimCity.
+See the [City observer guide](research/city-observer.md) and
+[City activity API](api-reference.md#committed-city-activity).
 
 ## Local SimCity and DeepSeek integration
 
@@ -54,6 +65,11 @@ this integration does not add paid-provider or hosted deployment evidence.
 Adjacent implemented boundaries that do not create another engine semantics
 version:
 
+- [Jev v4 domain delegation](jev-domains.md) adds prospective bounded economic
+  choices, recorded voting, optional supporting services, scoped Hermes/Commons
+  advice and same-menu evaluation. Existing stored worlds retain their policy.
+  Offline integration and replay are verified; live v4 effectiveness and hosted
+  advice rollout remain unclaimed;
 - one read-only semantic activity projection serves Living Agents and observer
   events; historical views exclude current runtime telemetry;
 - the proposal-only Builder sink creates verified immutable allowlisted bundles

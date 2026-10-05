@@ -24,6 +24,7 @@ from .semantics import semantics_version
 from .types import ActionEnvelope, ValidationError, positive_integer_id
 from .commands import CommandValidationError, default_registry
 from .commands.registry import POPULATION_MODELS
+from .commands.frontier import FRONTIER_MODELS
 from causal import CausalLinkService
 from communications.handlers import CommunicationRejected, CommunicationService
 from communications.privacy import safe_action_for_diagnostic, safe_command_metadata
@@ -71,6 +72,7 @@ VALID_TYPES = {
     "propose_partnership", "propose_household_move", "respond_household",
     "cancel_household_proposal", "separate_household",
     "set_time_plan",
+    "cast_election_vote",
 }
 ESTATE_BID_TYPES = {
     "place_estate_property_bid", "accept_estate_property_bid", "withdraw_estate_property_bid",
@@ -78,6 +80,7 @@ ESTATE_BID_TYPES = {
 }
 VALID_TYPES |= ESTATE_BID_TYPES
 VALID_TYPES |= set(POPULATION_MODELS)
+VALID_TYPES |= set(FRONTIER_MODELS)
 
 COMMUNICATION_TYPES = {"send_message", "reply_message", "forward_message"}
 _ACTION_PROVENANCE_FIELDS = {
@@ -98,6 +101,9 @@ def _authorization_payload(action: dict) -> str | None:
 
 
 class ActionExecutor:
+    def _do_cast_election_vote(self, tick, actor_id, action, phase):
+        return self.e.ballots.cast(tick, actor_id, action["ballot_key"], action["choice"])
+
     def _do_propose_population_movement(self, tick, actor_id, action, phase):
         result = self.e.population.propose(
             tick, actor_id, action["cause"], action["member_ids"], action["request_key"],
@@ -207,7 +213,8 @@ class ActionExecutor:
                 selected = appointment_indexes[0]
                 return [
                     self.execute_action(tick, actor_id, action, phase, seq=index)
-                    if index == selected else self._reject(
+                    if index == selected or (isinstance(action, dict)
+                        and action.get("type") == "cast_election_vote" and self.e.ballots.active(tick)) else self._reject(
                         tick, actor_id, action,
                         "attend_civic_appointment consumes the citizen's action for this turn",
                         phase,
@@ -223,7 +230,8 @@ class ActionExecutor:
                 selected = study_indexes[0]
                 return [
                     self.execute_action(tick, actor_id, action, phase, seq=index)
-                    if index == selected else self._reject(
+                    if index == selected or (isinstance(action, dict)
+                        and action.get("type") == "cast_election_vote" and self.e.ballots.active(tick)) else self._reject(
                         tick, actor_id, action,
                         "study_skill consumes the citizen's action for this turn", phase)
                     for index, action in enumerate(actions or [])
@@ -319,6 +327,16 @@ class ActionExecutor:
             return result
         if self.engine_semantics_version >= 15 and int(actor["age"]) < 18 and atype != "do_nothing":
             result = self._reject(tick, actor_id, action, "minor is not eligible for independent actions", phase)
+            self.store.update("action_proposals", proposal_id, validation_status="rejected",
+                              result_json=json.dumps(result, sort_keys=True))
+            return result
+        # Communications-only and historical executors do not load this opt-in
+        # service. Consult it only when the run enables frontier mechanics.
+        if (self.e.config.get("frontier", {}).get("version") == 1
+                and self.e.frontier.active(tick) and self.e.frontier.busy(actor_id)
+                and atype != "do_nothing"
+                and not (atype == "cast_election_vote" and self.e.ballots.active(tick))):
+            result = self._reject(tick, actor_id, action, "citizen is occupied by a frontier task", phase)
             self.store.update("action_proposals", proposal_id, validation_status="rejected",
                               result_json=json.dumps(result, sort_keys=True))
             return result
@@ -494,6 +512,9 @@ class ActionExecutor:
         return bool(v)
 
     # ── household / firm actions ─────────────────────────────────────────────
+    def _do_frontier(self, tick, actor_id, action, phase):
+        return self.e.frontier.execute(tick, actor_id, action, phase)
+
     def _do_do_nothing(self, tick, actor_id, action, phase) -> dict:
         return {"ok": True}
 
@@ -894,7 +915,8 @@ class ActionExecutor:
     def _do_cancel_construction(self, tick, actor_id, action, phase) -> dict:
         return self.e.construction.cancel(tick, actor_id, action)
 
-    def _do_found_company(self, tick, actor_id, action, phase) -> dict:
+    def founding_prerequisite_error(self, tick, actor_id, action) -> str | None:
+        """Read-only preconditions shared by incorporation and action availability."""
         entrepreneurship = self.e.config.get("entrepreneurship", {})
         activation_tick = max(0, int(
             entrepreneurship.get("activation_tick", 0)))
@@ -911,21 +933,17 @@ class ActionExecutor:
                 "AND json_type(payload_json,'$.business_idea')='object'",
                 (tick,), default=0))
             if formed_today >= daily_limit:
-                return {
-                    "ok": False,
-                    "reason": "daily entrepreneurship capacity reached",
-                }
+                return "daily entrepreneurship capacity reached"
         lawyer_id = int(action.get("lawyer_agent_id", 0))
         lawyer = self._agent(lawyer_id) if lawyer_id else None
         if not lawyer or not lawyer["alive"] or (lawyer["occupation"] or "").lower() != "lawyer":
-            return {"ok": False, "reason": "a living lawyer is required to incorporate"}
+            return "a living lawyer is required to incorporate"
         if self.engine_semantics_version >= 21 and (
                 int(lawyer["age"]) < 18 or not self.e.population.is_available(lawyer_id)):
-            return {"ok": False, "reason": "a locally available adult lawyer is required to incorporate"}
+            return "a locally available adult lawyer is required to incorporate"
         name = str(action.get("name", "")).strip()[:60]
         if not name:
-            return {"ok": False, "reason": "company needs a name"}
-        sector = str(action.get("sector", "services"))[:40]
+            return "company needs a name"
         civic_permit_required = (
             self.engine_semantics_version >= 12
             and self.e.city.enabled
@@ -936,30 +954,42 @@ class ActionExecutor:
                 f"SELECT id FROM {self.e.business_control.table} WHERE {self.e.business_control.column}=? AND status<>'bankrupt' LIMIT 1",
                 (actor_id,))
             if existing:
-                return {"ok": False, "reason": "founder already controls an active company"}
+                return "founder already controls an active company"
             if not civic_permit_required:
                 expected = getattr(
                     self.e, "_entrepreneurship_authorizations", {}).get((tick, actor_id))
-                if expected is None:
-                    return {
-                        "ok": False,
-                        "reason": "found_company is available only from a supplied entrepreneurship opportunity",
-                    }
+                bounded = []
+                if (self.e.config.get("llm", {}).get("decision_policy") or {}).get("version") == "bounded-economic-choice-v4":
+                    bounded = getattr(self.e, "_startup_action_authorizations", {}).get((tick, actor_id), [])
+                if expected is None and not bounded:
+                    return "found_company is available only from a supplied entrepreneurship opportunity"
                 exact_match = (
-                    _authorization_payload(action) == _authorization_payload(expected)
+                    (expected is not None and _authorization_payload(action) == _authorization_payload(expected))
+                    or any(_authorization_payload(action) == _authorization_payload(option) for option in bounded)
                 )
                 if not exact_match:
-                    return {
-                        "ok": False,
-                        "reason": "found_company must copy the supplied entrepreneurship action exactly",
-                    }
+                    return "found_company must copy the supplied entrepreneurship action exactly"
         capital = int(action.get("opening_capital", 0))
         if capital < 0:
-            return {"ok": False, "reason": "opening capital must be nonnegative"}
+            return "opening capital must be nonnegative"
         if capital:
             founder_acct = self.e.ledger.agent_checking_id(actor_id)
             if founder_acct is None or self.e.ledger.balance(founder_acct) < capital:
-                return {"ok": False, "reason": "insufficient opening capital"}
+                return "insufficient opening capital"
+        return None
+
+    def _do_found_company(self, tick, actor_id, action, phase) -> dict:
+        error = self.founding_prerequisite_error(tick, actor_id, action)
+        if error is not None:
+            return {"ok": False, "reason": error}
+        name = str(action.get("name", "")).strip()[:60]
+        sector = str(action.get("sector", "services"))[:40]
+        capital = int(action.get("opening_capital", 0))
+        civic_permit_required = (
+            self.engine_semantics_version >= 12
+            and self.e.city.enabled
+            and self.e.city.permits_required
+        )
         product = action.get("product") if isinstance(action.get("product"), dict) else None
         business_idea = None
         if "business_idea" in action:
@@ -1167,7 +1197,8 @@ class ActionExecutor:
         return {"ok": True}
 
     # ── VC track: pitch → evaluation → term sheet → equity (P1 R13) ─────────
-    def _do_pitch_vc(self, tick, actor_id, action, phase) -> dict:
+    def pitch_prerequisite_error(self, tick, actor_id, action) -> dict | None:
+        """Read-only exact authority, company control and VC state checks."""
         authorization_error = self._startup_authorization_error(
             tick, actor_id, action)
         if authorization_error is not None:
@@ -1175,6 +1206,16 @@ class ActionExecutor:
         firm_id = int(action.get("firm_id", 0)) or self._owned_firm(actor_id)
         if not firm_id or not self._controls_firm(actor_id, firm_id):
             return {"ok": False, "reason": "actor does not control a firm to pitch"}
+        ask = int(action.get("ask", action.get("amount", 0)))
+        if not self.e.vc.can_pitch(firm_id, ask):
+            return {"ok": False, "reason": "pitch rejected (firm not private, bad ask, or one already pending)"}
+        return None
+
+    def _do_pitch_vc(self, tick, actor_id, action, phase) -> dict:
+        error = self.pitch_prerequisite_error(tick, actor_id, action)
+        if error is not None:
+            return error
+        firm_id = int(action.get("firm_id", 0)) or self._owned_firm(actor_id)
         ask = int(action.get("ask", action.get("amount", 0)))
         pid = self.e.vc.pitch(tick, actor_id, firm_id, ask,
                               summary=str(action.get("summary", ""))[:300])

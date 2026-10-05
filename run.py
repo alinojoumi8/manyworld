@@ -1,4 +1,4 @@
-"""Agent Economy entrypoint.
+"""Manyworld entrypoint.
 
   python run.py --preflight-live --serve --approve-live-inference  # default evolving live dashboard
   python run.py --config runs/evolving-live.yaml --ticks 10 --preflight-live --approve-live-inference
@@ -195,13 +195,26 @@ async def provider_preflight(config: dict, *, live: bool = False) -> dict:
     report = validate_llm_config(config, raise_on_error=False)
     if not report["ready"] or not live:
         return {**report, "live_checked": False}
-    store = Store(":memory:")
-    store.init_run_meta("preflight", int(config.get("seed", 42)), config)
-    gateway = Gateway(store, config)
+    evidence_path = None
+    run_id = "preflight"
+    if config.get("llm", {}).get("decision_policy"):
+        from llm.decision_budget import typed_targets
+        if typed_targets(config):
+            run_id = f"preflight-{new_run_id()}"
+            evidence_path = DATA_DIR / "preflight" / f"{run_id}.db"
+    store = Store(str(evidence_path) if evidence_path else ":memory:")
+    gateway = None
     try:
-        return await gateway.preflight(live=True)
+        store.init_run_meta(run_id, int(config.get("seed", 42)), config)
+        gateway = Gateway(store, config)
+        result = await gateway.preflight(live=True)
+        if evidence_path:
+            result.update(preflight_run_id=run_id,
+                          preflight_evidence_path=str(evidence_path.resolve()))
+        return result
     finally:
-        gateway.close()
+        if gateway is not None:
+            gateway.close()
         store.close()
 
 
@@ -943,6 +956,21 @@ async def replay_headless(world: World, target_tick: int) -> None:
 
                 governed_contract = _scheduled_contract(
                     acceptance, matching_items[0])
+            typed_requests = source.execute(
+                "SELECT payload_json FROM events WHERE tick=? AND kind='oracle_typed_request' "
+                "AND json_extract(payload_json,'$.prediction_id')=?",
+                (action_tick, source_prediction_id)).fetchall()
+            if typed_requests:
+                if len(typed_requests) != 1:
+                    raise RuntimeError("recorded typed Oracle request is ambiguous")
+                typed_request = json.loads(typed_requests[0]["payload_json"])
+                if typed_request.get("question") != prediction["question"]:
+                    raise RuntimeError("recorded typed Oracle question does not match its prediction")
+                if "governed_contract" in typed_request:
+                    recorded_contract = typed_request["governed_contract"]
+                    if governed_contract is not None and governed_contract != recorded_contract:
+                        raise RuntimeError("recorded typed Oracle contract disagrees with its schedule")
+                    governed_contract = recorded_contract
             result = await world.oracle.ask(
                 str(prediction["question"]),
                 governed_contract=governed_contract)
@@ -1284,7 +1312,7 @@ def main() -> None:
     )
     if not read_only_report:
         configure_logging()
-    ap = argparse.ArgumentParser(description="Agent Economy")
+    ap = argparse.ArgumentParser(description="Manyworld")
     ap.add_argument("--config", default=DEFAULT_CONFIG,
                     help="world config (default: evolving live-agent desktop profile)")
     ap.add_argument("--ticks", type=int, default=None,
@@ -1393,7 +1421,11 @@ def main() -> None:
                     help="validate provider routes and required environment variables, then exit")
     ap.add_argument("--preflight-live", action="store_true",
                     help="also authenticate and confirm configured models through provider /models APIs")
+    from server.prepared import add_arguments, handle_cli
+    add_arguments(ap)
     args = ap.parse_args()
+    if handle_cli(ap, args):
+        return
     if args.replay_source_dir is not None and not args.replay:
         ap.error("--replay-source-dir requires --replay")
     if args.activate_entrepreneurship and (

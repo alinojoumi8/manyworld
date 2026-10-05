@@ -2,7 +2,7 @@
 
 This implementation translates four useful architectural patterns identified
 while reviewing Buzz. It does not copy Buzz source code. Buzz is Apache-2.0;
-Agent Economy remains MIT, so the adaptation is an independent implementation
+Manyworld remains MIT, so the adaptation is an independent implementation
 against this repository's deterministic engine, ledger, replay, privacy, and
 hosted-control-plane contracts.
 
