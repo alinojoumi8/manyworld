@@ -1236,7 +1236,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-@tanstack/query-core@5.101.4
+@tanstack/query-core@5.102.8
 Declared license: MIT
 ==============================================================================
 MIT License
@@ -1262,7 +1262,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-@tanstack/react-query@5.101.4
+@tanstack/react-query@5.102.8
 Declared license: MIT
 ==============================================================================
 MIT License
