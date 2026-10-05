@@ -1,4 +1,4 @@
-"""Offline recorded engine-action replay; whole-world replay is a separate gate."""
+"""Provider-free financing lifecycle and recorded engine/world replay fixtures."""
 from __future__ import annotations
 
 import hashlib
@@ -83,4 +83,59 @@ def test_recorded_financing_actions_replay_exactly_without_rewriting_source(tmp_
         assert restored.ledger.balance(firm_account) == before
     finally:
         replay.close()
+    assert hashlib.sha256(source_path.read_bytes()).hexdigest() == digest
+
+
+def test_scripted_world_financing_replays_recorded_responses_exactly(tmp_path, monkeypatch):
+    import asyncio
+    from llm.adapters import OpenAICompatAdapter
+    from run import open_run, replay_headless
+    from run_config import load_config
+
+    async def network_forbidden(*_args, **_kwargs):
+        raise AssertionError("offline financing validation attempted live transport")
+    monkeypatch.setattr(OpenAICompatAdapter, "complete", network_forbidden)
+    config = load_config("runs/v2-institutional-rehearsal.yaml")
+    assert all(route["provider"] == "scripted" for route in [
+        config["llm"]["default_route"], *config["llm"]["routes"].values()])
+    config["entrepreneurship"] = {
+        "enabled": True, "new_arrivals_only": False, "activation_tick": 1,
+        "review_interval_ticks": 1, "autonomous_preseed": True,
+        "preseed_pitch_delay_ticks": 0, "preseed_raise_cents": 250_000,
+    }
+    config["checkpoint_every"] = 0
+    config["checkpoint_dir"] = str(tmp_path / "checkpoints")
+    store, world, run_id = open_run(config, None, None, data_dir=tmp_path)
+    source_path = tmp_path / f"{run_id}.db"
+    try:
+        # The fixture seeds an authorized pitch; actual recorded decisions must
+        # advance its offer, founder consent, diligence and disbursement.
+        assert store.scalar("SELECT COUNT(*) FROM pitches") == 1
+        assert store.scalar("SELECT COUNT(*) FROM funding_rounds") == 0
+        for _ in range(4):
+            asyncio.run(world.step())
+        sheet = store.query_one("SELECT * FROM term_sheets")
+        funding = store.query_one("SELECT * FROM funding_rounds")
+        assert sheet is not None and funding is not None
+        assert sheet["status"] == funding["status"] == "closed"
+        assert funding["term_sheet_id"] == sheet["id"]
+        assert funding["amount_cents"] == sheet["amount_cents"]
+        assert funding["currency_code"] == sheet["currency_code"]
+        assert sheet["founder_accepted_tick"] is not None
+        assert sheet["investor_accepted_tick"] is not None
+        assert store.scalar("SELECT COUNT(*) FROM funding_rounds") == 1
+        assert world.economy.ledger.reconcile()[0]
+        assert world.economy.startups.cap_table_reconciles(int(funding["firm_id"]))
+    finally:
+        world.close()
+    digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    replay_store, replay_world, _ = open_run({}, None, run_id, data_dir=tmp_path)
+    try:
+        asyncio.run(replay_headless(replay_world, 4))
+        proof = verify_replay(source_path, replay_store.path)
+        assert proof["exact"], proof["differences"]
+        assert replay_store.scalar("SELECT COUNT(*) FROM funding_rounds") == 1
+        assert replay_world.economy.ledger.reconcile()[0]
+    finally:
+        replay_world.close()
     assert hashlib.sha256(source_path.read_bytes()).hexdigest() == digest
