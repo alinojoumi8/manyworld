@@ -1,9 +1,9 @@
-# Agent Economy — Product Requirements Document
+# Manyworld — Product Requirements Document
 
 **Version:** 1.2 · **Date:** 2026-08-20 · **Owner:** Ali · **Status:** Maintained implementation contract
 
 > **Scope — read before comparing with `docs/world-os/`.** This document governs
-> what is *built and maintained today*: the Agent Economy kernel through R22.
+> what is *built and maintained today*: the Manyworld kernel through R22.
 > [`docs/world-os/PRD.md`](docs/world-os/PRD.md) is a **successor specification**,
 > not a copy of this file — it defines World OS, an extension of this runtime
 > whose later semantic lakes are partly unreleased. The two documents differ on

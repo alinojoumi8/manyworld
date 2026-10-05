@@ -2,7 +2,7 @@
 
 The ten local cohort profiles use `openai-codex` / `gpt-5.6-luna` through the
 existing Hermes ChatGPT login. Each citizen keeps its own identity, memory,
-session, and Agent Economy MCP credential. Hermes resolves shared provider
+session, and Manyworld MCP credential. Hermes resolves shared provider
 authentication through its supported global auth-store fallback; do not copy
 rotating OAuth tokens into individual profiles.
 

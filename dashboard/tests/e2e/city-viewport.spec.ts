@@ -5,6 +5,25 @@ async function openCity(page:import('@playwright/test').Page){
   await installCityFixture(page);await page.goto('/runs/city-fixture/world?cityView=3d');
   await expect(page.getByTestId('city-canvas')).toHaveAttribute('data-ready','true');
 }
+test('unlocated-only cities render without scene errors and preserve selection',async({page})=>{
+  const errors:string[]=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  page.on('console',message=>{if(message.type()==='error'&&message.text().startsWith('THREE.'))errors.push(message.text());});
+  await installCityFixture(page,{agents:37,places:0});
+  await page.goto('/runs/city-fixture/world?view=3d');
+  const canvas=page.getByTestId('city-canvas');
+  await expect(canvas).toHaveAttribute('data-ready','true');
+  await expect(page.getByText('This run has no recorded place coordinates.',{exact:false})).toBeVisible();
+  await page.getByLabel('Keyboard explorer').selectOption('agent:1');
+  await page.getByRole('button',{name:'Focus Citizen 1',exact:true}).click();
+  await page.getByRole('button',{name:'Atlas',exact:true}).click();
+  await expect(page.locator('canvas')).toHaveCount(0);
+  await page.getByRole('button',{name:'3D · experimental',exact:true}).click();
+  await expect(canvas).toHaveAttribute('data-ready','true');
+  await expect(page.getByLabel('Keyboard explorer')).toHaveValue('agent:1');
+  expect(errors).toEqual([]);
+});
+
 test('300 agents / 100 places share selection, camera, evidence and history',async({page})=>{
   const errors:string[]=[];page.on('pageerror',e=>errors.push(e.message));await openCity(page);
   const explorer=page.getByLabel('Keyboard explorer');
@@ -55,6 +74,7 @@ test('3D camera bookmarks restore the rendered view across modes, evidence, hist
   await page.getByRole('link',{name:'Open citizen dossier'}).click();
   await expect(page.getByRole('dialog',{name:'People in City'})).toBeVisible();
   await page.getByRole('button',{name:'Back to City · Esc'}).click();
+  await expect(page.getByRole('dialog',{name:'People in City'})).toBeHidden();
   await expect(canvas).toHaveAttribute('data-camera3d',moved!);
   await page.reload();await expect(canvas).toHaveAttribute('data-ready','true');
   await expect(canvas).toHaveAttribute('data-camera3d',moved!);
@@ -144,9 +164,15 @@ test('construction before and after states preserve City context through linked 
   const construction=page.getByRole('region',{name:'City construction',exact:true});
   await expect(construction).toContainText('1 under construction · 0 completed');
   await expect(construction.getByRole('button',{name:'Cancel · full refund'})).toBeDisabled();
+  const originalCanvas=await page.getByTestId('city-canvas').elementHandle();
   await construction.getByRole('link',{name:'Event #8',exact:true}).click();
   await expect(page.getByRole('dialog',{name:'Evidence in City'})).toBeVisible();
+  expect(await originalCanvas!.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(page.getByTestId('city-canvas')).toHaveAttribute('data-camera3d',camera);
   await page.getByRole('button',{name:'Back to City · Esc'}).click();
+  await expect(page.getByRole('dialog',{name:'Evidence in City'})).toBeHidden();
+  expect(await originalCanvas!.evaluate(node=>node.isConnected)).toBe(true);
+  await expect(page.getByTestId('city-canvas')).toHaveAttribute('data-ready','true');
   await expect(page.getByLabel('Keyboard explorer')).toHaveValue('firm:1');
   await expect(page.getByRole('button',{name:'3D · experimental',exact:true})).toHaveAttribute('aria-pressed','true');
   await expect(page.getByTestId('city-canvas')).toHaveAttribute('data-camera3d',camera);

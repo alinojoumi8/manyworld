@@ -1,4 +1,4 @@
-AGENT ECONOMY DASHBOARD - THIRD-PARTY NOTICES
+MANYWORLD DASHBOARD - THIRD-PARTY NOTICES
 
 This file is generated from dashboard/package-lock.json and the license files
 distributed with every production dependency, plus build packages whose
@@ -1600,7 +1600,7 @@ Declared license: MIT
     SOFTWARE
 
 ==============================================================================
-@types/react@19.2.18
+@types/react@19.3.0
 Declared license: MIT
 ==============================================================================
     MIT License
@@ -2595,7 +2595,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-react@19.2.8
+react@19.3.0
 Declared license: MIT
 ==============================================================================
 MIT License
@@ -2621,7 +2621,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-react-dom@19.2.8
+react-dom@19.3.0
 Declared license: MIT
 ==============================================================================
 MIT License
@@ -2861,7 +2861,7 @@ end of terms and conditions
 The licenses of externally maintained libraries from which parts of the Software is derived are listed [here](https://github.com/rolldown/rolldown/blob/main/THIRD-PARTY-LICENSE).
 
 ==============================================================================
-scheduler@0.27.0
+scheduler@0.28.0
 Declared license: MIT
 ==============================================================================
 MIT License

@@ -54,7 +54,7 @@ def export_static_replay(store: Store, output_path: str | Path) -> Path:
         "scenario_packs": [dict(row) for row in store.query("SELECT * FROM scenario_packs ORDER BY id")],
     }
     payload = json.dumps(data, sort_keys=True, default=str).replace("</", "<\\/")
-    title = html.escape(f"Agent Economy replay {meta['run_id']}")
+    title = html.escape(f"Manyworld replay {meta['run_id']}")
     document = f"""<!doctype html><html lang='en'><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'><title>{title}</title>
 <style>body{{font:15px system-ui;background:#07110f;color:#e7f1ed;margin:0;padding:2rem}}main{{max-width:1100px;margin:auto}}.card{{background:#10201c;border:1px solid #27483e;border-radius:14px;padding:1rem;margin:1rem 0}}input{{width:100%;padding:.7rem;background:#050a09;color:white;border:1px solid #385f52}}pre{{white-space:pre-wrap;max-height:55vh;overflow:auto}}</style>
