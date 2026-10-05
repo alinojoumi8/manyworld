@@ -1,4 +1,4 @@
-"""Agent Economy entrypoint.
+"""Manyworld entrypoint.
 
   python run.py --preflight-live --serve --approve-live-inference  # default evolving live dashboard
   python run.py --config runs/evolving-live.yaml --ticks 10 --preflight-live --approve-live-inference
@@ -35,6 +35,7 @@ from engine.semantics import (
     validate_engine_semantics_version,
 )
 from engine.store import Store
+from llm.completion_guard import CompletionGuard
 from llm.gateway import Gateway
 from llm.readiness import validate_llm_config
 from world.loop import World, new_run_id
@@ -194,13 +195,26 @@ async def provider_preflight(config: dict, *, live: bool = False) -> dict:
     report = validate_llm_config(config, raise_on_error=False)
     if not report["ready"] or not live:
         return {**report, "live_checked": False}
-    store = Store(":memory:")
-    store.init_run_meta("preflight", int(config.get("seed", 42)), config)
-    gateway = Gateway(store, config)
+    evidence_path = None
+    run_id = "preflight"
+    if config.get("llm", {}).get("decision_policy"):
+        from llm.decision_budget import typed_targets
+        if typed_targets(config):
+            run_id = f"preflight-{new_run_id()}"
+            evidence_path = DATA_DIR / "preflight" / f"{run_id}.db"
+    store = Store(str(evidence_path) if evidence_path else ":memory:")
+    gateway = None
     try:
-        return await gateway.preflight(live=True)
+        store.init_run_meta(run_id, int(config.get("seed", 42)), config)
+        gateway = Gateway(store, config)
+        result = await gateway.preflight(live=True)
+        if evidence_path:
+            result.update(preflight_run_id=run_id,
+                          preflight_evidence_path=str(evidence_path.resolve()))
+        return result
     finally:
-        gateway.close()
+        if gateway is not None:
+            gateway.close()
         store.close()
 
 
@@ -625,7 +639,10 @@ def open_run(config: dict, resume: str | None, replay: str | None, *,
              replay_source_dir: Path | None = None,
              new_run_id_override: str | None = None,
              activate_entrepreneurship: bool = False,
-             activate_numeric_grounding: bool = False) -> tuple[Store, World, str]:
+             activate_numeric_grounding: bool = False,
+             completion_guard: CompletionGuard | None = None) -> tuple[Store, World, str]:
+    if replay and completion_guard is not None:
+        raise ValueError("recorded replay cannot attach a live completion guard")
     from engine.storage_policy import StoragePolicy
     policy = StoragePolicy.from_mapping(config.get("storage_policy"))
     if policy is not None and not replay:
@@ -681,9 +698,13 @@ def open_run(config: dict, resume: str | None, replay: str | None, *,
                 logger, logging.INFO,
                 "run.resume.local_citizenship_enabled",
                 run_id=run_id, changes=local_control_plane)
-        world = World(store, stored_cfg)
-        _hydrate_resumed_world(world, meta, stored_cfg)
-        world.restore_prng_state()
+        try:
+            world = World(store, stored_cfg, completion_guard=completion_guard)
+            _hydrate_resumed_world(world, meta, stored_cfg)
+            world.restore_prng_state()
+        except BaseException:
+            store.close()
+            raise
         return store, world, run_id
     if replay:
         source_db = (source_root / f"{replay}.db").resolve()
@@ -744,7 +765,7 @@ def open_run(config: dict, resume: str | None, replay: str | None, *,
     store = Store(str(database))
     try:
         store.init_run_meta(run_id, int(config.get("seed", 42)), config)
-        world = World(store, config)
+        world = World(store, config, completion_guard=completion_guard)
         world.initialize()
         return store, world, run_id
     except BaseException:
@@ -767,7 +788,7 @@ def fork_run(spec: str, data_dir: Path = DATA_DIR, *, upgrade_semantics: int | N
         parent_db = data_dir / f"{run_id}.db"
         if not parent_db.exists():
             sys.exit(f"run database not found: {parent_db}")
-        parent = Store(str(parent_db))
+        parent = Store(str(parent_db), read_only=True)
         row = parent.query_one(
             "SELECT path, tick FROM checkpoints WHERE tick<=? ORDER BY tick DESC, id DESC LIMIT 1",
             (int(tick_s),))
@@ -799,6 +820,10 @@ def fork_run(spec: str, data_dir: Path = DATA_DIR, *, upgrade_semantics: int | N
         sys.exit(str(exc))
     config["engine_semantics_version"] = old_semantics
     if upgrade_semantics is not None:
+        if new_semantics >= 16 and old_semantics < 16:
+            store.close()
+            dest.unlink(missing_ok=True)
+            sys.exit("Semantics 16 requires fresh genesis; historical origins and pending arrival keys cannot be inferred during a fork upgrade")
         if new_semantics <= old_semantics:
             store.close()
             dest.unlink(missing_ok=True)
@@ -941,6 +966,21 @@ async def replay_headless(world: World, target_tick: int) -> None:
 
                 governed_contract = _scheduled_contract(
                     acceptance, matching_items[0])
+            typed_requests = source.execute(
+                "SELECT payload_json FROM events WHERE tick=? AND kind='oracle_typed_request' "
+                "AND json_extract(payload_json,'$.prediction_id')=?",
+                (action_tick, source_prediction_id)).fetchall()
+            if typed_requests:
+                if len(typed_requests) != 1:
+                    raise RuntimeError("recorded typed Oracle request is ambiguous")
+                typed_request = json.loads(typed_requests[0]["payload_json"])
+                if typed_request.get("question") != prediction["question"]:
+                    raise RuntimeError("recorded typed Oracle question does not match its prediction")
+                if "governed_contract" in typed_request:
+                    recorded_contract = typed_request["governed_contract"]
+                    if governed_contract is not None and governed_contract != recorded_contract:
+                        raise RuntimeError("recorded typed Oracle contract disagrees with its schedule")
+                    governed_contract = recorded_contract
             result = await world.oracle.ask(
                 str(prediction["question"]),
                 governed_contract=governed_contract)
@@ -1282,7 +1322,7 @@ def main() -> None:
     )
     if not read_only_report:
         configure_logging()
-    ap = argparse.ArgumentParser(description="Agent Economy")
+    ap = argparse.ArgumentParser(description="Manyworld")
     ap.add_argument("--config", default=DEFAULT_CONFIG,
                     help="world config (default: evolving live-agent desktop profile)")
     ap.add_argument("--storage-policy", type=Path,
@@ -1393,7 +1433,11 @@ def main() -> None:
                     help="validate provider routes and required environment variables, then exit")
     ap.add_argument("--preflight-live", action="store_true",
                     help="also authenticate and confirm configured models through provider /models APIs")
+    from server.prepared import add_arguments, handle_cli
+    add_arguments(ap)
     args = ap.parse_args()
+    if handle_cli(ap, args):
+        return
     if args.replay_source_dir is not None and not args.replay:
         ap.error("--replay-source-dir requires --replay")
     if args.activate_entrepreneurship and (
@@ -1431,6 +1475,8 @@ def main() -> None:
         ap.error("--acceptance-run and --oracle-campaign-run are mutually exclusive")
     if args.oracle_campaign_run and args.serve:
         ap.error("--oracle-campaign-run is a finalized headless evidence command")
+    if args.ticks is not None and args.ticks < 0:
+        ap.error("--ticks must be zero or a positive tick count")
     if args.oracle_campaign_run and (args.fork or args.replay):
         ap.error("--oracle-campaign-run cannot use fork or replay inputs")
     mode = (
@@ -1546,7 +1592,9 @@ def main() -> None:
             source = DATA_DIR / f"{args.export_static}.db"
         if not source.exists():
             sys.exit(f"run database not found: {source}")
-        store = Store(str(source))
+        # A stored run is a scientific artifact: export from a read-only handle
+        # so the exporter can neither migrate its schema nor flip journal mode.
+        store = Store(str(source), read_only=True)
         from server.static_export import export_static_replay
         target = Path(args.output) if args.output else Path("static_exports") / f"{store.get_meta()['run_id']}.html"
         print(export_static_replay(store, target))

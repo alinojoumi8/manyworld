@@ -1,226 +1,246 @@
-# Agent Economy
+# Manyworld
 
-Agent Economy is a deterministic economic-society simulator for studying how
-bounded agents, institutions, information, and policy interact over time. Its
-primary product is a reproducible research world: every monetary effect passes
-through a double-entry ledger, important decisions leave evidence, and stored
-runs can be replayed without making new model calls.
+### Many lives. One evolving world.
 
-The project can also grow into a World OS for owner-run external agents,
-multi-user hosted observatories, civic construction, and governed code
-proposals. Those are versioned expansion surfaces around the research engine;
-they do not replace its deterministic authority boundary.
+**Start a city. Meet its citizens. Follow what their choices set in motion.**
 
-## What you can study
+Manyworld is an open-source society simulator. Agents work, shop, borrow,
+talk, and build businesses inside a world of companies, banks, markets, and
+public institutions. Watch the city unfold, change its conditions, and inspect
+why things happened.
 
-- bank runs, credit conditions, labor markets, firms, prices, and inequality;
-- rumors, news, conversations, beliefs, and observable causal chains;
-- monetary, fiscal, health, legal, political, and construction mechanisms;
-- paired treatment/control experiments with same-seed counterfactuals;
-- scripted, local, or paid-provider cognition under one recorded gateway;
-- replay, provenance, calibration, and operational cost at different scales.
+**Run locally · Start without API keys · Explore a 3D city · Add AI models · Replay your experiments**
 
-LLMs propose structured actions. Deterministic code validates identity,
-authority, state, ownership, balances, and action bounds before the engine may
-change the world. Model prose never directly moves money or rewrites evidence.
+[Start locally](#start-locally) · [Explore the city](#explore-the-city) · [Try an experiment](#run-one-experiment) · [Read the handbook](docs/README.md) · [Contribute](CONTRIBUTING.md)
 
-## Start safely
+![Manyworld running locally: an experimental 3D city, a selected citizen, and recorded activity.](docs/images/readme/manyworld-city.png)
 
-Requirements: Python 3.11 or 3.12. Node.js is needed only for dashboard
-development.
+<sub>Actual Manyworld dashboard at day 0 of the provider-free city profile: 300 citizens, scripted agents, no model calls. The experimental 3D view includes illustrative buildings, roads, and housing scenery; see [what the map means](city/README.md#what-the-map-means).</sub>
 
-PowerShell:
+## What can you do with it?
+
+- **Follow a citizen.** Inspect their work, finances, decisions, and place in the city.
+- **Watch businesses compete.** Explore hiring, wages, production, trade, credit, and failure.
+- **Change the conditions.** Introduce a shock or compare policies across controlled runs.
+- **Bring your own intelligence.** Start with scripted agents, then connect local models,
+  hosted models, or an external agent when you are ready.
+- **Find the explanation.** Follow recorded decisions and transactions, compare outcomes,
+  and replay a run without making new model calls.
+
+Try a question: *Can a rumor put pressure on a bank? What happens when credit
+gets tighter? Can a citizen turn an idea into a business?*
+
+Manyworld is for curious builders, agent developers, researchers, and educators.
+Available mechanisms depend on the profile you choose. It is a simulation
+laboratory: results explain the simulated world and need separate calibration
+and validation before being applied to a real economy.
+
+## Start locally
+
+You need **Git and Python 3.11 or 3.12**. The dashboard is already bundled;
+Node.js is only needed for frontend development.
+
+<details open>
+<summary><strong>Windows · PowerShell</strong></summary>
 
 ```powershell
-git clone https://github.com/alinojoumi8/agent-economy.git
-Set-Location agent-economy
+git clone https://github.com/alinojoumi8/manyworld.git manyworld
+Set-Location manyworld
 python -c "import sys; assert sys.version_info[:2] in {(3, 11), (3, 12)}, 'Python 3.11 or 3.12 required'"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --require-hashes -r requirements.lock
-python run.py --config runs/base.yaml
+python run.py --config runs/simcity.yaml --serve
 ```
 
-POSIX shell:
+</details>
+
+<details>
+<summary><strong>macOS / Linux · bash</strong></summary>
 
 ```bash
-git clone https://github.com/alinojoumi8/agent-economy.git
-cd agent-economy
+git clone https://github.com/alinojoumi8/manyworld.git manyworld
+cd manyworld
 python3 -c "import sys; assert sys.version_info[:2] in {(3, 11), (3, 12)}, 'Python 3.11 or 3.12 required'"
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --require-hashes -r requirements.lock
-python run.py --config runs/base.yaml
+python run.py --config runs/simcity.yaml --serve
 ```
 
-Open <http://127.0.0.1:8000>. The provider-free base world is the recommended
-development default. For the full provider-free observatory with regions,
-contracts, legal matters, and politics, run:
+</details>
 
-```powershell
-python run.py --config runs/v2-institutional-rehearsal.yaml
-```
+Open [localhost:8000](http://127.0.0.1:8000). The city starts paused.
+Choose **Advance one tick** to advance a day, **Run** to continue, and **Pause** to inspect.
+In Live City, choose **3D · experimental** to explore the buildings and citizens.
 
-> **Cost warning:** `python run.py` without `--config` selects the live production
-> profile. Always name a profile. Run `--preflight-live` before paid inference,
-> review the resolved routes and cap, and never commit provider credentials.
+This profile creates 300 citizens, including three permit clerks. It uses scripted
+agents: **no API keys, model downloads, or inference charges**. After dependency
+installation, the simulation makes no live provider calls.
+
+Manyworld was previously called Agent Economy. Some technical identifiers
+retain that name for compatibility.
+
+## Explore the city
+
+Move from the city as a whole to a particular person, business, bank, or event.
+Select an entity to inspect its records. Explore markets, news, politics, and
+public institutions through the surrounding workspaces.
+
+The experimental 3D viewer places recorded entities in an interactive city. Buildings and
+citizen markers help you navigate; streets and housing blocks are illustrative
+scenery. They do not claim simulated traffic or individual homes. The **2D atlas**
+remains available, including as a graphics fallback.
+
+Want to take part? Control an eligible citizen, apply for a business permit, and
+follow the civic process. A permitted company's founder can propose a workplace
+on a vacant commercial parcel; the engine checks permissions, settles the cost,
+and records construction. See the [city guide](city/README.md) and
+[construction rules](docs/urban-development.md).
+
+Pin a recorded day to investigate history, or return to the live view. Public
+views respect visibility rules and do not expose private agent messages or hidden
+bank information. The [Civic Atlas guide](docs/civic-atlas.md) explains the
+observatory and its evidence boundaries.
+
+## Choose your next world
+
+Stop the server with `Ctrl+C` before starting another profile.
+
+| Try this | Command or guide | Model calls |
+|---|---|---|
+| Small mechanics world | `python run.py --config runs/base.yaml` | None |
+| 3D city and construction | `python run.py --config runs/simcity.yaml --serve` | None |
+| Regions, contracts, law, and politics | `python run.py --config runs/v2-institutional-rehearsal.yaml` | None |
+| Manually control a citizen | `python run.py --config runs/participant.yaml` | None |
+| Use local or hosted AI | [Provider configuration](docs/configuration.md) | Profile-dependent |
+| 1,000-agent MiniMax M3 world | [`runs/v2-live-minimax.yaml`](runs/v2-live-minimax.yaml) | Live 100-agent core and shared services; deterministic periphery; $150 cap |
+| Connect your own agent | [Client quickstart](clients/README.md) | Depends on your agent |
+
+> **Choose a profile explicitly.** `python run.py` without `--config` selects the live production
+> profile. Before paid inference, run `--preflight-live`, review the resolved
+> routes and spending cap, and follow the authorization steps in the
+> [operator runbook](docs/operator-runbook.md). Keep credentials in your local, ignored `.env`.
 
 ## Run one experiment
 
-Run five rumor-treatment seeds and five same-seed controls:
+**Can a false rumor cause depositors to move their money?** The included
+provider-free experiment runs five seeds, each with a rumor treatment and a
+same-seed control:
 
-```powershell
+```bash
 python run.py --experiment runs/experiments/rumor_vs_control.yaml
 ```
 
-Artifacts are written to `reports/out/` as JSON, Markdown, and HTML. The rumor
-mechanic adds an observation; it does not directly lower trust or move funds.
-The measured path must emerge through recorded state transitions:
+Each world runs for 30 simulated days. A rumor about Bank 1 is introduced on
+day 10 in the treatment. Compare deposits, reserve ratios, sentiment,
+unemployment, and recorded events in the JSON, Markdown, and HTML reports
+written to `reports/out/`.
 
-```text
-exposure -> belief update -> decision -> deposit transfer -> reserve pressure
-```
+The rumor adds an observation; it does not directly move money or lower trust.
+A bank run is a question to investigate, not a promised result. This scripted
+example exercises mechanics and evidence collection; it does not demonstrate
+live AI behavior. See the [research guide](docs/research-guide.md) for experiment
+design and the [Price Lab](docs/research/price-lab.md) for price inspectors and
+study workflows, including comparisons from saved worlds.
 
-Use the [research guide](docs/research-guide.md) before interpreting causal,
-calibration, or acceptance results.
+## How it works
 
-## Choose a run profile
-
-| Profile | Use | Network and spend |
-|---|---|---|
-| `runs/base.yaml` | Small deterministic development world | None |
-| `runs/v2-institutional-rehearsal.yaml` | Full provider-free observatory | None |
-| `runs/participant.yaml` | Manually control one citizen through normal validation | None |
-| `runs/experiments/rumor_vs_control.yaml` | Paired causal experiment | None by default |
-| `runs/acceptance/rehearsal.yaml` | Free 365-tick acceptance rehearsal | None |
-| `runs/acceptance/pilot.yaml` | First paid research-validity gate | Live, $25 cap |
-| `runs/v2-live-minimax.yaml` | 1,000-agent MiniMax M3 profile | Live core, deterministic periphery, $150 cap |
-| `runs/acceptance/production.yaml` | Full production acceptance | Live; separately authorized |
-
-Profiles never silently change provider, model, endpoint, or credential type.
-See [configuration and providers](docs/configuration.md) for inheritance,
-environment variables, budgets, and version gates.
-
-## How the system fits together
+**Agents propose decisions. The engine checks them. The ledger records the consequences.**
 
 ```mermaid
 flowchart LR
-    UI[React observatory] --> API[FastAPI]
-    API --> WORLD[Deterministic world loop]
-    WORLD --> ENGINE[Economy and ledger]
-    WORLD --> AGENTS[Agent policies and cognition]
-    AGENTS --> GATEWAY[Recorded provider gateway]
-    WORLD --> DB[(SQLite run artifact)]
-    GATEWAY --> DB
-    WORLD --> REPLAY[Exact replay and reports]
+    O[What an agent can observe] --> A[Scripted policy or AI model]
+    A --> P[Proposed action]
+    P --> V{Engine checks}
+    V -->|Accepted| E[World and money ledger]
+    V -->|Rejected| R[Rejection record]
+    E --> S[(Saved run)]
+    R --> S
+    S --> D[Dashboard, replay, and research reports]
 ```
 
-The fixed daily lifecycle closes prior obligations, gathers morning proposals,
-executes validated actions in stable order, clears markets, publishes news,
-runs conversations and memory, then records metrics and reconciliation. A
-failed invariant halts and checkpoints instead of continuing with corrupted
-state.
+An AI response cannot directly move money. The engine checks identity, authority,
+funds, and world state. Monetary effects use a double-entry ledger, and daily
+phases run in a stable order. Replay uses recorded responses in a new database
+and checks canonical table equality, preserving the source run and its semantics.
 
-Major source areas:
+**Python 3.11 / 3.12 · FastAPI + React · SQLite run artifacts · MIT licensed**
 
-| Path | Responsibility |
+<details>
+<summary><strong>Find your way around the code</strong></summary>
+
+| Area | Responsibility |
 |---|---|
-| `engine/` | Ledger and deterministic economic mutation |
-| `world/` | Genesis, phases, shocks, metrics, and replay |
-| `agents/` | Personas, scheduling, policies, memory, and external turns |
-| `llm/` | Provider routing, metering, readiness, and recorded responses |
-| `server/`, `dashboard/` | Local API and observatory |
-| `hosted/`, `deploy/` | Optional tenant control plane and reference deployment |
-| `builder_workspace/` | Immutable proposal creation only; no apply/merge/deploy authority |
-| `research/`, `experiments/`, `reports/` | Reproducibility, studies, and evidence |
+| [`engine/`](engine/), [`world/`](world/) | Economy, ledger, genesis, daily phases, shocks, and replay |
+| [`agents/`](agents/), [`llm/`](llm/) | Policies, memory, external turns, and model routing |
+| [`server/`](server/), [`dashboard/`](dashboard/), [`city/`](city/) | API, observatory, and 3D city |
+| [`research/`](research/), [`experiments/`](experiments/), [`reports/`](reports/) | Studies, comparisons, and evidence |
+| [`hosted/`](hosted/), [`deploy/`](deploy/) | Optional tenant control plane and deployment |
+| [`builder_workspace/`](builder_workspace/) | Stored code proposals with proposal-only authority |
 
-Read the [architecture guide](docs/architecture.md) for authority, privacy,
-persistence, projection, and replay boundaries.
+Read the [architecture guide](docs/architecture.md) for ownership, persistence,
+privacy, and replay contracts.
+
+</details>
 
 ## World OS expansion
 
-The maintained simulator is the foundation. Version-gated expansion contracts
-currently include:
+Connect external agents over REST or Streamable HTTP MCP, explore the Agent
+Commons, and work with version-gated civic and compute services. Start with the
+[External Agent Gateway](docs/world-os/EXTERNAL-AGENT-GATEWAY.md) and
+[attendance guide](docs/semantics14-external-turn-attendance.md).
 
-- Semantics 8 communications and causal-observatory foundations;
-- Semantics 9 External Agent Gateway;
-- Semantics 10 Agent Commons;
-- Semantics 11 compute economy and provider pools;
-- Semantics 12 civic permits;
-- Semantics 13 agent-built construction;
-- Semantics 14 external-turn attendance evidence;
-- a proposal-only Civic Builder storage seam without a Builder runtime,
-  mandate, patch application, Git, or deployment authority;
-- a separately enabled hosted tenant control plane with chained audit rows.
+These surfaces have different maturity levels. External-agent and Commons
+public rollout still have evidence gates; hosted operation is separately enabled.
+The Builder stores proposals and cannot apply patches, merge, or deploy. The
+[World OS specifications](docs/world-os/README.md) and
+[implementation-status ledger](docs/implementation-status.md) distinguish
+implemented behavior, local verification, rollout gates, and proposed work.
 
-Implementation does not imply public release. The
-[implementation-status ledger](docs/implementation-status.md) is the single
-maintained source for implemented, released, rollout-gated, and proposed
-labels. The [World OS index](docs/world-os/README.md) explains the successor
-specifications and their acceptance boundaries.
+## Go deeper
 
-Outside agents connect through REST or Streamable HTTP MCP; Agent Economy does
-not install or impersonate their runtimes. Start with the
-[External Agent Gateway contract](docs/world-os/EXTERNAL-AGENT-GATEWAY.md),
-[client quickstart](clients/README.md), and
-[Semantics 14 attendance guide](docs/semantics14-external-turn-attendance.md).
-
-## Documentation
-
-The [handbook index](docs/README.md) routes each audience to the authoritative
-detail. Core guides:
-
-| Need | Document |
+| I want to… | Start here |
 |---|---|
-| Install, first run, resume, replay | [Getting started](docs/getting-started.md) |
-| Use the Civic Atlas dashboard | [Civic Atlas guide](docs/civic-atlas.md) |
-| Design a defensible experiment | [Research guide](docs/research-guide.md) |
-| Understand system and authority boundaries | [Architecture](docs/architecture.md) |
-| Select profiles, providers, and semantics | [Configuration](docs/configuration.md) |
-| Integrate with REST, WebSocket, OAuth, or MCP | [API reference](docs/api-reference.md) |
-| Deploy, back up, restore, and respond | [Operator runbook](docs/operator-runbook.md) |
-| Diagnose common failures | [Troubleshooting](docs/troubleshooting.md) |
-| Build, test, and review changes | [Development](docs/development.md) |
-| Classify and retire branches safely | [Branch lifecycle](docs/branch-lifecycle.md) |
-| Keep documentation synchronized | [Documentation maintenance](docs/documentation-maintenance.md) |
-| See current delivery truth | [Implementation status](docs/implementation-status.md) |
-| Assemble local-only reproducibility evidence | [Reproducibility profile](docs/reproducibility-release-profile.md) |
+| Install, resume, replay, or generate a report | [Getting started](docs/getting-started.md) |
+| Navigate the observatory | [Civic Atlas](docs/civic-atlas.md) |
+| Design an experiment | [Research guide](docs/research-guide.md) |
+| Select models and budgets | [Configuration](docs/configuration.md) |
+| Integrate an agent or API client | [API reference](docs/api-reference.md) |
+| Understand data flow and authority | [Architecture](docs/architecture.md) |
+| Deploy, back up, or restore | [Operator runbook](docs/operator-runbook.md) |
+| Diagnose a problem | [Troubleshooting](docs/troubleshooting.md) |
+| Assemble reproducibility evidence | [Reproducibility profile](docs/reproducibility-release-profile.md) |
+| Browse all documentation | [Handbook](docs/README.md) |
 
-Normative product and engineering contracts live in [PRD.md](PRD.md),
-[TECH-SPEC.md](TECH-SPEC.md), and [TASKS.md](TASKS.md). Architecture decisions
-live under [docs/adr](docs/adr/README.md). Generated reports are run-specific
-evidence, not maintained documentation.
+## Build with us
 
-## Verification and contribution
+Bring a scenario, an agent integration, a clearer inspector, or a focused fix.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) and
+[development and testing](docs/development.md).
 
 Run the focused smoke contract used by CI:
 
-```powershell
+```bash
 python -m pytest -q tests/test_documentation.py tests/test_external_agent_gateway.py tests/test_research_export.py tests/test_prd_completion.py tests/test_recorded_replay_golden.py
 ```
 
-The complete local gate, dashboard workflow, compatibility rules, and branch
-process are in [development and testing](docs/development.md). Contributions
-must preserve ledger ownership, deterministic replay, privacy boundaries, and
-unrelated worktree changes. See [CONTRIBUTING.md](CONTRIBUTING.md) and
-[SECURITY.md](SECURITY.md).
+Changes preserve accounting, replay, privacy, and unrelated work. See
+[branch lifecycle](docs/branch-lifecycle.md),
+[documentation maintenance](docs/documentation-maintenance.md),
+[architecture decisions](docs/adr/README.md), and [SECURITY.md](SECURITY.md).
+The product contracts are [PRD.md](PRD.md), [TECH-SPEC.md](TECH-SPEC.md), and [TASKS.md](TASKS.md).
 
-## Current status and limits
+<details>
+<summary>Historical baseline provenance</summary>
 
-The codebase contains mature deterministic simulation, replay, observatory,
-research, external-agent, and optional hosted surfaces. Paid-provider outcomes,
-public deployment readiness, and future Civic Builder governance remain
-evidence- or rollout-dependent; do not infer them from code presence.
+Semantics-7 closure merged as commit `255555c2b24530c0bd39aed2f501277a468adc0a`,
+with post-merge CI run `29368193807` and no public tag or publication from that
+authorization. Later evidence and limits live in the implementation-status ledger.
 
-Historical Semantics-7 closure merged as commit
-`255555c2b24530c0bd39aed2f501277a468adc0a`, post-merge CI run `29368193807`,
-and no public tag or publication from that authorization. Later release and
-campaign evidence is preserved in the implementation-status ledger rather than
-duplicated here.
+</details>
 
 ## License
 
-Agent Economy is released under the [MIT License](LICENSE). Third-party notices
-and source-specific attribution are recorded in [NOTICE](NOTICE), the
-[dashboard notices](dashboard/public/THIRD_PARTY_NOTICES.txt), and relevant
-source manifests.
+[MIT](LICENSE). Third-party attribution is recorded in [NOTICE](NOTICE),
+the [dashboard notices](dashboard/public/THIRD_PARTY_NOTICES.txt), and source manifests.

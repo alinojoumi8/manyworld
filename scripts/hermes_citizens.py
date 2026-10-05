@@ -1,0 +1,515 @@
+"""Persistent local Hermes cohort operator. Secrets stay in isolated profiles.
+
+Provision with --setup, then advance at most N ticks with --days N, including
+admission or saved-day recovery. Re-running resumes the same world and profile
+sessions and verifies queued/executed receipts.
+"""
+from __future__ import annotations
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.parse import urlsplit
+
+import httpx
+import psutil
+import yaml
+from dotenv import dotenv_values
+
+ROOT = Path(__file__).resolve().parents[1]
+LINUX_GUARDIAN = sys.platform == "linux"
+COHORT = [
+    ("maya-chen", "Maya Chen", "engineer", "Practical and careful. Seek engineering work and improve useful skills."),
+    ("omar-haddad", "Omar Haddad", "small_business", "Entrepreneurial but cost-conscious. Look for unmet needs and viable business opportunities."),
+    ("sofia-reyes", "Sofia Reyes", "teacher", "Patient and community-minded. Seek stable work and develop teaching skills."),
+    ("noah-okafor", "Noah Okafor", "nurse", "Service-oriented and reliable. Prefer healthcare employment and a savings buffer."),
+    ("leila-patel", "Leila Patel", "accountant", "Analytical and frugal. Seek accounting work and protect household liquidity."),
+    ("lucas-moreau", "Lucas Moreau", "construction", "Hands-on and ambitious. Seek construction work and practical training."),
+    ("aisha-mensah", "Aisha Mensah", "software_dev", "Inventive and methodical. Develop software skills and look for productive employment."),
+    ("ethan-kim", "Ethan Kim", "retail_worker", "Sociable and cautious. Seek retail work and keep essential goods affordable."),
+    ("isabel-costa", "Isabel Costa", "economist", "Curious and evidence-driven. Study market conditions and seek sustainable work."),
+    ("daniel-novak", "Daniel Novak", "gig_worker", "Adaptable and independent. Balance flexible jobs, learning, and financial reserves."),
+]
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".new")
+    temporary.write_text(json.dumps(value, indent=2), encoding="utf-8")
+    for attempt in range(6):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            # Windows readers/scanners may briefly deny atomic replacement.
+            # Keep the previous complete document and surface persistent errors.
+            if attempt == 5:
+                raise
+            time.sleep(.02 * 2**attempt)
+
+
+def read_json(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+class MissingQueuedAction(RuntimeError):
+    """A completed model turn has no accepted submission and can be corrected."""
+
+
+class HermesCallTimeout(RuntimeError):
+    """The bounded call timed out and its tracked process tree was reaped."""
+
+
+def _owned_hermes_children(parent):
+    """Recheck direct ancestry after psutil's process-list snapshot."""
+    try:
+        children = parent.children()
+        parent_created = parent.create_time()
+    except psutil.NoSuchProcess:
+        return []
+    owned = []
+    for child in children:
+        try:
+            # A PID can be recycled between the child-list snapshot and the
+            # Process object being created. Validate every edge, not just the
+            # descendant's age relative to the original root.
+            child_created = child.create_time()
+            if child.ppid() == parent.pid and child_created >= parent_created:
+                owned.append((child, child_created))
+        except psutil.NoSuchProcess:
+            pass
+    return owned
+
+
+def _run_linux_hermes_process(command, *, timeout, **kwargs):
+    # A separate process owns each subreaper, so concurrent Hermes workers
+    # cannot adopt or terminate one another's descendants.
+    with tempfile.TemporaryDirectory(prefix="ae-hermes-guardian-") as directory:
+        result_path = Path(directory) / "result.json"
+        guardian = Path(__file__).with_name("hermes_process_guardian.py")
+        process = subprocess.Popen([sys.executable, str(guardian), "--result",
+            str(result_path), "--timeout", str(timeout), "--", *command], **kwargs)
+        try:
+            process.wait(timeout=timeout + 20)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                    raise RuntimeError("Hermes process cleanup failed; refusing another dispatch") from None
+        if not result_path.is_file():
+            raise RuntimeError("Hermes guardian exited without cleanup evidence")
+        result = read_json(result_path)
+        if result["state"] == "timed_out":
+            raise HermesCallTimeout(f"Hermes call exceeded {timeout} seconds")
+        if result["state"] != "complete":
+            raise RuntimeError("Hermes process cleanup or launch failed; refusing another dispatch")
+        return subprocess.CompletedProcess(command, result["returncode"])
+
+
+def run_hermes_process(command, *, timeout, **kwargs):
+    """Track Windows venv children so a timeout cannot leave a second citizen acting."""
+    if LINUX_GUARDIAN:
+        return _run_linux_hermes_process(command, timeout=timeout, **kwargs)
+    process = psutil.Popen(command, **kwargs)
+    # Popen retains its own process handle even if a fast launcher has already
+    # exited. Do not require a new OS creation-time lookup for that root.
+    tracked = {(process.pid, None): process}
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            pending = list(tracked.values())
+            while pending:
+                for child, child_created in _owned_hermes_children(pending.pop()):
+                    identity = (child.pid, child_created)
+                    if identity not in tracked:
+                        tracked[identity] = child
+                        pending.append(child)
+            returncode = process.poll()
+            if returncode is not None:
+                return subprocess.CompletedProcess(command, returncode)
+            if time.monotonic() >= deadline:
+                raise HermesCallTimeout(f"Hermes call exceeded {timeout} seconds")
+            time.sleep(0.1)
+    finally:
+        # Suspend parents before discovery/termination to prevent new descendants
+        # during cleanup. Process objects guard against PID reuse; never scan or
+        # terminate other profiles or Desktop processes by command-line pattern.
+        pending = list(tracked.values())
+        while pending:
+            parent = pending.pop()
+            try:
+                parent.suspend()
+                for child, child_created in _owned_hermes_children(parent):
+                    identity = (child.pid, child_created)
+                    if identity not in tracked:
+                        tracked[identity] = child
+                        pending.append(child)
+            except psutil.NoSuchProcess:
+                pass
+        for child in reversed(list(tracked.values())):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        _, alive = psutil.wait_procs(list(tracked.values()), timeout=10)
+        if alive:
+            raise RuntimeError("Hermes process cleanup failed; refusing another dispatch")
+        process.wait()
+
+
+@contextmanager
+def cohort_lock(path):
+    """Hold the same nonblocking exclusive lock used by the cohort worker."""
+    with path.open("a+b") as lock:
+        if os.name == "nt":
+            import msvcrt
+            lock.seek(0); lock.write(b"0"); lock.flush(); lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
+class CohortOperator:
+    def __init__(self, args, *, world_root=None, create_directory=True):
+        self.args = args
+        self.world_root = Path(world_root) if world_root is not None else ROOT
+        self.root = self.world_root / "data/control-plane/hermes-cohort" / args.run_id
+        if create_directory:
+            self.root.mkdir(parents=True, exist_ok=True)
+        self.manifest_path = self.root / "manifest.json"
+        self.client = httpx.Client(base_url=args.url, timeout=300, trust_env=False)
+        self.database = self.world_root / "data/runs" / f"{args.run_id}.db"
+        self.hermes = Path(args.hermes_python)
+        self.profiles = Path(args.profiles_root)
+
+    def api(self, path, *, body=None, token=None):
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        method = "POST" if body is not None else "GET"
+        for attempt in range(1, 4):
+            try:
+                response = self.client.request(method, path, json=body, headers=headers)
+            except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as error:
+                # A lost write response may follow a successful clock step or
+                # registration. Only repeat reads; leave ambiguous writes for
+                # boundary/receipt recovery instead of applying them twice.
+                if method != "GET" or attempt == 3:
+                    raise
+                with (self.root / "api-read-retries.jsonl").open("a", encoding="utf-8") as journal:
+                    journal.write(json.dumps({"time": time.time(), "path": httpx.URL(path).path,
+                        "attempt": attempt, "error": type(error).__name__}) + "\n")
+                time.sleep(.25 * attempt)
+                continue
+            response.raise_for_status()
+            return response.json()
+
+    def check_world(self):
+        state = self.api("/api/run/status")
+        if state["run_id"] != self.args.run_id:
+            raise RuntimeError("The server is serving a different world; refusing to dispatch citizens")
+        if state.get("active_tick") is not None or state.get("running"):
+            raise RuntimeError("Pause and complete the current world tick before using the cohort operator")
+        if state.get("status") in {"halted", "finished", "error"} or state.get("pause_reason"):
+            raise RuntimeError("The world requires operator attention before continuing")
+        return state
+
+    def setup(self):
+        self.check_world()
+        manifest = read_json(self.manifest_path) if self.manifest_path.exists() else {
+            "run_id": self.args.run_id, "citizens": [], "created_at": time.time()}
+        for slug, name, occupation, goal in COHORT:
+            if any(c["name"] == name for c in manifest["citizens"]):
+                continue
+            profile = f"ae-{self.args.run_id}-{slug}"
+            home = self.profiles / profile
+            pending_path = self.root / f"{slug}-registration.json"
+            if not home.exists():
+                subprocess.run([str(self.hermes), "-m", "hermes_cli.main", "profile", "create",
+                                profile, "--no-alias", "--no-skills", "--description", goal], check=True,
+                               stdout=subprocess.DEVNULL)
+            if pending_path.exists():
+                registration = read_json(pending_path)
+            else:
+                registration = self.api("/api/v2/public/agent-registrations", body={
+                    "world_slug": "local-sandbox", "handle": profile, "display_name": name,
+                    "biography": goal, "preferred_occupation": occupation, "runtime": "hermes"})
+                write_json(pending_path, registration)
+            claim = self.client.get(registration["claim_url"])
+            claim.raise_for_status()
+            match = re.search(r'name="csrf_token"\s+value="([^"]+)"', claim.text)
+            if not match:
+                raise RuntimeError(f"Claim form unavailable for {name}")
+            claim = self.client.post(registration["claim_url"], data={"csrf_token": match.group(1)})
+            claim.raise_for_status()
+            credential_path = home / "agent-economy.json"
+            if credential_path.exists():
+                credential = read_json(credential_path)
+            else:
+                credential = self.api(f"/api/v2/public/agent-registrations/{registration['registration_id']}/exchange",
+                                      body={}, token=registration["bootstrap_token"])
+                write_json(credential_path, credential)
+            config = {
+                "model": {"provider": "openai-codex", "default": "gpt-5.6-luna", "max_tokens": 2000},
+                "agent": {"max_turns": 12, "reasoning_effort": "low", "api_max_retries": 1},
+                "toolsets": ["agent_economy"],
+                "mcp_servers": {"agent_economy": {"url": self.args.url + "/mcp",
+                    "headers": {"Authorization": "Bearer " + credential["access_token"]},
+                    "tools": {"include": ["ae_identity_get", "ae_world_observe", "ae_turn_wait",
+                        "ae_actions_list", "ae_action_submit", "ae_action_receipt_get"]},
+                    "resources": False, "prompts": False}},
+            }
+            (home / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+            (home / "SOUL.md").write_text(f"You are {name}, a persistent simulated citizen. {goal}\n", encoding="utf-8")
+            citizen = {"profile": profile, "name": name, "occupation": occupation, "goal": goal,
+                       "connection_id": credential["connection"]["id"], "home": str(home)}
+            manifest["citizens"].append(citizen)
+            write_json(self.manifest_path, manifest)
+            # The exchanged bootstrap token is no longer useful.
+            pending_path.unlink()
+            print(f"Onboarded {name}", flush=True)
+        if not getattr(self.args, "keep_active_world", False):
+            write_json(ROOT / "data/control-plane/hermes-city.json", {"run_id": self.args.run_id})
+
+    def receipts(self, citizen, tick):
+        with sqlite3.connect(f"file:{self.database.as_posix()}?mode=ro", uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            return [dict(row) for row in connection.execute(
+                "SELECT id,status,actor_id,action_json,result_json FROM external_action_submissions "
+                "WHERE connection_id=? AND target_tick=? ORDER BY created_at", (citizen["connection_id"], tick))]
+
+    def recover_day(self, citizens):
+        """Finish a crashed operator day only when all decisions were saved."""
+        state = self.api("/api/run/status")
+        if state["run_id"] != self.args.run_id or state.get("running") or state.get("pause_reason"):
+            raise RuntimeError("The world is not available for saved-day recovery")
+        active = state.get("active_tick")
+        if active is None:
+            return
+        if (self.root / "STOP").exists():
+            raise RuntimeError("A partial day is saved; resume explicitly before recovering it")
+        if not all(any(row["status"] in {"queued", "executed", "rejected"}
+                       for row in self.receipts(citizen, active)) for citizen in citizens):
+            raise RuntimeError("Partial day has incomplete cohort receipts; inspect it before recovery")
+        self.api("/api/run/step", body={})
+        if self.check_world()["tick"] != active:
+            raise RuntimeError("Saved-day recovery did not reach its expected boundary")
+        write_json(self.root / f"day-{active}.json", {
+            citizen["name"]: self.receipts(citizen, active) for citizen in citizens})
+        print(f"Recovered saved day {active} without re-dispatching Hermes", flush=True)
+
+    def decide(self, citizen, tick):
+        for attempt in range(1, 4):
+            if any(row["status"] == "queued" for row in self.receipts(citizen, tick)):
+                return
+            if (self.root / "STOP").exists():
+                return
+            if attempt > 1 and self.check_world()["tick"] != tick - 1:
+                raise RuntimeError("The world changed before decision recovery; refusing to retry a stale day")
+            try:
+                self._decide_once(citizen, tick, attempt=attempt)
+                return
+            except (MissingQueuedAction, HermesCallTimeout) as error:
+                reason = "call_timeout" if isinstance(error, HermesCallTimeout) else "no_queued_receipt"
+                with (self.root / "decision-retries.jsonl").open("a", encoding="utf-8") as journal:
+                    journal.write(json.dumps({"time": time.time(), "citizen": citizen["name"],
+                        "tick": tick, "attempt": attempt, "reason": reason}) + "\n")
+                if attempt == 3:
+                    raise
+                print(f"{citizen['name']}: refreshing turn after {reason} (attempt {attempt}/3)", flush=True)
+
+    def _decide_once(self, citizen, tick, *, attempt=1):
+        return self.decision_attempt(citizen, tick, attempt=attempt)
+
+    def decision_attempt(self, citizen, tick, *, attempt=1, max_attempts=3):
+        """One bounded Hermes process; callers own scheduling and any retries.
+
+        Hermes itself may make multiple model/tool requests during this process.
+        The production wrapper retains its original three-attempt policy.
+        """
+        if any(row["status"] == "queued" for row in self.receipts(citizen, tick)):
+            return
+        if (self.root / "STOP").exists():
+            return  # The run loop will retain queued actions without advancing.
+        home = Path(citizen["home"])
+        token = read_json(home / "agent-economy.json")["access_token"]
+        identity = self.api("/api/v2/agent/me", token=token)
+        if not identity.get("actor"):
+            raise RuntimeError(f"{citizen['name']} has not arrived yet")
+        # Polling alone intentionally retains a closed turn. Explicit local
+        # renewal reopens only an expired, unconsumed next-day window and audits it.
+        self.api("/api/v2/agent/turn/renew", body={"target_tick": tick}, token=token)
+        output = self.root / citizen["profile"]
+        output.mkdir(exist_ok=True)
+        # Keep failed attempts, including those from a previous process, for diagnosis.
+        attempt_id = f"tick-{tick}-attempt-{attempt}-{time.time_ns()}"
+        prompt = output / f"{attempt_id}.txt"
+        prompt.write_text(
+            f"You are {citizen['name']}, a persistent Agent Economy citizen. {citizen['goal']} "
+            f"Continue your own saved life and prior plans. Target tick {tick}. "
+            "Use only agent_economy MCP tools. Read identity and the receipt for your previous action if available. "
+            "Observe the world, list legal actions, and get a fresh turn envelope. Submit exactly one valid action "
+            "for this wake using its exact tick, projection hash and a unique idempotency key. "
+            "Call ae_turn_wait immediately before submitting. Copy its complete 64-character projection hash "
+            "verbatim into observed_projection_hash; never abbreviate, guess, or reuse an old hash. "
+            "Call one MCP tool per tool_call. If tool argument validation fails or the turn is stale, "
+            "fetch ae_turn_wait again and correct the submission. Do not finish until a queued receipt is confirmed. "
+            f"This is attempt {attempt} of at most {max_attempts}; if recovering, your previous turn did not yield a queued receipt. "
+            "Choose useful economic "
+            "work, job seeking, training, exploration, settlement founding or building, moving, civic voting, "
+            "or essential purchases based on your own goals and affordability. Frontier actions appear only when available; "
+            "you may choose a meaningful unique name for a new settlement. Read action "
+            "schemas; never invent parameters. If already queued, do not duplicate it. Do not publish posts or send "
+            "messages, including say_public or Commons writes. Do not advance the world. End with your receipt ID "
+            "and a short plan to carry into the next day. The operator executes the day after all citizens finish.", encoding="utf-8")
+        model = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))["model"]
+        command = [str(self.hermes), "-m", "hermes_cli.main", "--profile", citizen["profile"],
+                   "chat", "--oneshot", "--provider", model["provider"], "--model", model["default"],
+                   "--toolsets", "agent_economy", "--ignore-rules", "--max-turns", "12",
+                   "--run-budget", "180", "--query-file", str(prompt)]
+        session = output / "session.json"
+        if session.exists():
+            command += ["--resume", read_json(session)["session_id"], "--no-restore-cwd"]
+        env = os.environ.copy()
+        # Resolve OAuth through Hermes' profile/global auth store. Never clone
+        # rotating ChatGPT tokens or require an unrelated provider's API key.
+        if model["provider"] == "deepseek":
+            key = (dotenv_values(home / ".env").get("DEEPSEEK_API_KEY")
+                   or dotenv_values(self.world_root / ".env").get("DEEPSEEK_API_KEY") or env.get("DEEPSEEK_API_KEY"))
+            if not key:
+                raise RuntimeError("DEEPSEEK_API_KEY is unavailable; no substitute agent will act")
+            env["DEEPSEEK_API_KEY"] = key
+        env["PYTHONIOENCODING"] = "utf-8"
+        log_path = output / f"{attempt_id}.log"
+        timed_out = False
+        with log_path.open("w", encoding="utf-8") as log:
+            try:
+                result = run_hermes_process(command, cwd=home, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=240)
+            except HermesCallTimeout:
+                timed_out = True
+                result = subprocess.CompletedProcess(command, -1)
+                with (self.root / "decision-timeouts.jsonl").open("a", encoding="utf-8") as journal:
+                    journal.write(json.dumps({"time": time.time(), "citizen": citizen["name"],
+                        "tick": tick, "attempt": attempt, "timeout_seconds": 240,
+                        "process_cleanup": "complete"}) + "\n")
+        if result.returncode:
+            # Startup failures can leave an empty transcript. Retain the OS exit
+            # code without copying provider output, credentials, or private prompts.
+            with (self.root / "decision-process-exits.jsonl").open("a", encoding="utf-8") as journal:
+                journal.write(json.dumps({"time": time.time(), "citizen": citizen["name"],
+                    "tick": tick, "attempt": attempt, "exit_code": result.returncode,
+                    "log": str(log_path.relative_to(self.root))}) + "\n")
+        # Desktop and connection checks can create newer conversations while
+        # this citizen resumes an older one. Persist the session from THIS CLI
+        # invocation, never the latest row in the shared profile database.
+        transcript = re.sub(r"\x1b\[[0-9;]*m", "", log_path.read_text(encoding="utf-8", errors="replace"))
+        session_ids = re.findall(r"Session:\s+([a-zA-Z0-9_-]+)", transcript)
+        session_id = session_ids[-1] if session_ids else (read_json(session)["session_id"] if session.exists() else None)
+        with sqlite3.connect(f"file:{(home / 'state.db').as_posix()}?mode=ro", uri=True) as db:
+            row = db.execute("SELECT id FROM sessions WHERE id=?", (session_id,)).fetchone()
+            if row:
+                write_json(session, {"session_id": row[0], "last_attempt_tick": tick})
+            elif result.returncode == 0 or timed_out:
+                raise RuntimeError(f"{citizen['name']} did not identify its saved session; no unrelated session will be substituted")
+        if not any(row["status"] == "queued" for row in self.receipts(citizen, tick)):
+            error = HermesCallTimeout if timed_out else (RuntimeError if result.returncode else MissingQueuedAction)
+            raise error(f"{citizen['name']} did not queue an action; Hermes exit code "
+                        f"{result.returncode}; inspect {log_path}")
+        print(f"{citizen['name']}: queued tick {tick}", flush=True)
+        return {"exit_code": result.returncode, "timed_out": timed_out,
+                "session_id": session_id, "log": str(log_path)}
+
+    def run(self):
+        manifest = read_json(self.manifest_path)
+        citizens = manifest["citizens"]
+        if len(citizens) != 10:
+            raise RuntimeError("Exactly ten provisioned citizens are required")
+        with cohort_lock(self.root / "operator.lock"):
+            starting = self.api("/api/run/status")
+            if starting["run_id"] != self.args.run_id:
+                raise RuntimeError("The server is serving a different world")
+            target_tick = starting["tick"] + self.args.days
+            self.recover_day(citizens)
+            self.check_world()
+            if not (self.root / "STOP").exists():
+                identities = [self.api("/api/v2/agent/me", token=read_json(
+                    Path(c["home"]) / "agent-economy.json")["access_token"]) for c in citizens]
+                if any(item.get("status") == "pending_actor" for item in identities):
+                    self.api("/api/run/step", body={})
+                    print(f"Saved admission day {self.check_world()['tick']}", flush=True)
+            for _ in range(target_tick - self.check_world()["tick"]):
+                if (self.root / "STOP").exists():
+                    print("Stopped at a saved day boundary", flush=True)
+                    break
+                tick = self.check_world()["tick"] + 1
+                write_json(self.root / "status.json", {"state": "deciding", "tick": tick, "pid": os.getpid()})
+                with ThreadPoolExecutor(max_workers=getattr(self.args, "workers", 2)) as pool:
+                    list(pool.map(lambda citizen: self.decide(citizen, tick), citizens))
+                if (self.root / "STOP").exists():
+                    break
+                if self.check_world()["tick"] != tick - 1:
+                    raise RuntimeError("The world advanced outside this operator; refreshing is required")
+                self.api("/api/run/step", body={})
+                state = self.check_world()
+                if state["tick"] != tick:
+                    raise RuntimeError("The world did not complete the expected day")
+                evidence = {c["name"]: self.receipts(c, tick) for c in citizens}
+                write_json(self.root / f"day-{tick}.json", evidence)
+                write_json(self.root / "status.json", {"state": "day_completed", "tick": tick, "pid": os.getpid()})
+                print(f"Saved day {tick}: {sum(len(v) for v in evidence.values())} receipts", flush=True)
+            write_json(self.root / "status.json", {"state": "paused", "tick": self.check_world()["tick"]})
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--url", default="http://127.0.0.1:8000")
+    parser.add_argument("--hermes-python", default=str(Path(os.environ.get("LOCALAPPDATA", "")) / "hermes/hermes-agent/venv/Scripts/python.exe"))
+    parser.add_argument("--profiles-root", default=str(Path(os.environ.get("LOCALAPPDATA", "")) / "hermes/profiles"))
+    parser.add_argument("--setup", action="store_true")
+    parser.add_argument("--keep-active-world", action="store_true", help="Keep the launcher's existing selected world")
+    parser.add_argument("--workers", type=int, default=2, choices=range(1, 11))
+    parser.add_argument("--days", type=int, default=3,
+                        help="Maximum ticks to advance, including admission or saved-day recovery")
+    parser.add_argument("--supervise", action="store_true", help="Record child exits and progress independently")
+    args = parser.parse_args()
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", args.run_id) or not 1 <= args.days <= 100:
+        parser.error("Use a safe run ID and 1-100 days per bounded session")
+    try:
+        target = urlsplit(args.url)
+        port = target.port
+    except ValueError:
+        parser.error("This operator supports the local sandbox only")
+    if (target.scheme != "http" or target.hostname not in {"127.0.0.1", "localhost"}
+            or target.username or target.password or target.path or target.query or target.fragment
+            or port is None or not 1 <= port <= 65535):
+        parser.error("This operator supports the local sandbox only")
+    if args.supervise:
+        from hermes_supervision import supervise
+        return supervise(ROOT, args.run_id, [sys.executable, str(Path(__file__).resolve()),
+            *[arg for arg in sys.argv[1:] if arg != "--supervise"]], args.days)
+    operator = CohortOperator(args)
+    try:
+        operator.setup() if args.setup else operator.run()
+    except Exception as exc:
+        write_json(operator.root / "status.json", {"state": "error", "error": str(exc)})
+        raise
+    finally:
+        operator.client.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
