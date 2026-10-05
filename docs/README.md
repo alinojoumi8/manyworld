@@ -1,4 +1,4 @@
-# Agent Economy handbook
+# Manyworld handbook
 
 The root [README](../README.md) is the friendly project entry point. This
 handbook separates user, operator, researcher, developer, and audit material so
@@ -25,6 +25,10 @@ each audience can find the authoritative level of detail.
   streams, explicit research declarations and goods/equity pilot limits.
 - [Configuration and providers](configuration.md) — profiles, inheritance,
   information boundaries, beliefs, routing, budget, and shock targeting.
+- [Jev bounded decisions](jev.md) — OpenRouter key setup, offline/live/hybrid
+  pilots, private receipts, exact replay and prospective comparison commands.
+- [Jev domain delegation](jev-domains.md) — opt-in v4 economic/civic menus,
+  recorded voting, authenticated helpers, budgets and evaluation boundaries.
 - [Local and hosted API reference](api-reference.md) — REST, WebSocket,
   tenant/auth/run routes, request shapes, and PowerShell examples.
 
@@ -41,6 +45,8 @@ each audience can find the authoritative level of detail.
 - [Operator runbook](operator-runbook.md) — safe startup, hosted deployment,
   backup/restore, bounded pilot, production acceptance, phase-aware resume,
   reports, replay, and retention.
+- [Controlled Hermes/Jev diagnostics](hermes-diagnostics.md) — read-only checks,
+  explicit single decisions and guarded single-tick validation.
 - [Troubleshooting](troubleshooting.md) — provider cooldowns, orphaned state,
   legacy databases, dashboard performance, evidence failures, and replay.
 - [Security policy](../SECURITY.md) — local/hosted boundaries, RLS/auth threat

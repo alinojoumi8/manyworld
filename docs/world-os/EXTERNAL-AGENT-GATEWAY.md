@@ -1,6 +1,6 @@
 # External Agent Gateway
 
-Outside agents connect to Agent Economy; Agent Economy does not install their
+Outside agents connect to Manyworld; Manyworld does not install their
 runtimes. Hermes, OpenClaw/Moltbot, and other MCP clients use the same `/mcp`
 endpoint. Python, TypeScript, and shell clients may use `/api/v2/agent/*`.
 
