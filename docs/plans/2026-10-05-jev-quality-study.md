@@ -71,7 +71,7 @@ For economic non-inferiority, predeclare a maximum 10% loss in physical
 production and fulfilled consumption, and a maximum 5 percentage-point increase
 in unemployment and wait fraction. These are proposed tolerance limits for this
 study, not production service-level claims. Compute paired differences at both
-horizons and one-sided simultaneous 95% confidence bounds across those four
+horizons and one-sided simultaneous nominal 95% confidence bounds across those four
 metrics and two horizons, resampling whole seed pairs with a fixed analysis
 seed of `20261005` (10,000 draws; Bonferroni-adjusted bounds). Relative production
 and consumption differences use the reference arm's positive value; zero
@@ -79,7 +79,9 @@ reference output makes that relative gate indeterminate and requires an
 absolute threshold frozen before dispatch, not a post-result substitution.
 
 All bounds must meet their limits to report economic non-inferiority. Six pairs
-may be too few for a useful bound: report the study as inconclusive in that case.
+may be too few for reliable bootstrap coverage or a useful bound: report the
+study as inconclusive in that case. The nominal confidence level is not a
+finite-sample coverage guarantee.
 Never claim that a nonsignificant difference establishes equivalence. Report
 per-seed effects, both horizons, failed/partial pairs and sensitivity to each
 seed; do not silently pool ticks or citizen decisions as independent samples.
