@@ -473,6 +473,20 @@ for important failure/recovery logs.
 
 ## CI and review
 
+The application Docker runtime is digest-pinned to Python 3.12.15 on Debian
+Trixie (SQLite 3.46.1). The former Bookworm runtime (SQLite 3.40.1) produces
+different floating-point sentiment aggregates in the preserved semantics-5
+golden replay. The Trixie runtime passes that exact fixture and the semantics-1
+and semantics-2 replay/source-immutability checks; no metric tolerance or stored
+source data is changed. Build it with `docker build -t manyworld:local .`.
+
+Historical artifacts must retain the runtime that produced them. The
+`PYTHON_RUNTIME_IMAGE` build argument accepts an explicitly chosen image from
+the original run's runtime receipt, including its digest. Validate replay in
+that runtime before resuming a historical run. Updating the default image does
+not migrate run databases or establish compatibility with every older SQLite
+aggregation implementation. Keep the original image and source artifacts.
+
 GitHub Actions builds the dashboard on Node.js 22 and runs Python 3.11/3.12 on
 Ubuntu and Windows. Every PR also runs a single deterministic shard of the
 engine/world/agents-focused tests via `scripts/pytest_shard.py`, so edits to
