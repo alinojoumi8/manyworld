@@ -1,6 +1,6 @@
-# Agent Economy — City 3D
+# Manyworld — City 3D
 
-A playable, original Blender city integrated into the existing Agent Economy dashboard on branch `simcity`. The Python economy owns all money, permits, firms and construction. The browser projects those records into selectable buildings and citizens.
+A playable, original Blender city integrated into the Manyworld dashboard on `main`. The Python economy owns all money, permits, firms and construction. The browser projects those records into selectable buildings and citizens.
 
 ![Live city after recorded construction completed](live-city-preview.png)
 

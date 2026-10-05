@@ -674,7 +674,7 @@ def create_hosted_app(
     metrics = _HostedMetrics(registry)
     checks = dict(readiness_checks or {})
     app = FastAPI(
-        title="Agent Economy Hosted Control Plane",
+        title="Manyworld Hosted Control Plane",
         version="2",
         docs_url=None,
         redoc_url=None,
@@ -1746,8 +1746,8 @@ def create_hosted_app(
         client_name = escape(str(_attribute(registered, "client_name", default="MCP client")))
         scope_text = escape(" ".join(sorted(requested)) or "identity only")
         page = (
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorize Agent Economy</title>"
-            "</head><body><main><h1>Authorize Agent Economy</h1>"
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Authorize Manyworld</title>"
+            "</head><body><main><h1>Authorize Manyworld</h1>"
             f"<p><strong>{client_name}</strong> requests: {scope_text}</p>"
             "<p>Select one connection you own. The client never receives your provider keys, "
             "prompts, memories, or private reasoning.</p>"
