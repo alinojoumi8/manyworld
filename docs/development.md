@@ -465,6 +465,11 @@ compatibility impact, and remaining risk. See [CONTRIBUTING.md](../CONTRIBUTING.
 ## CircleCI release checks
 
 The connected `gh/alinojoumi8/manyworld` project uses `.circleci/config.yml`.
+The executor pins Python 3.11.17 on Debian Trixie by image digest, including
+SQLite 3.46.1. The previous `cimg/python:3.11` image used SQLite 3.37.2 and
+reproduced different floating-point sentiment aggregates in the preserved
+semantics-5 golden replay. Keep that fixture and its exact comparison intact;
+validate a replacement runtime against it before updating the image pin.
 Normal runs execute the provider-free smoke suite. To explicitly run the full
 Python 3.11 Linux suite, use the authenticated CLI:
 

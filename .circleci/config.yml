@@ -8,7 +8,8 @@ parameters:
 executors:
   python311:
     docker:
-      - image: cimg/python:3.11
+      # Keep the SQLite aggregation runtime used by the exact golden replay.
+      - image: python:3.11.17-trixie@sha256:27e044f7e01fea05c1760324d58fc5360a0767b9ef098e74ddaf8c70b8f46d26
     resource_class: medium
 
 commands:
@@ -22,6 +23,7 @@ commands:
           name: Verify environment and sources
           command: |
             python -m pip check
+            python -c "import sys, sqlite3; print(sys.version); print('SQLite', sqlite3.sqlite_version)"
             python -m compileall -q agents engine hosted llm oracle reports research server world run.py
       - run: mkdir -p test-results
 
