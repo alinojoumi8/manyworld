@@ -1,5 +1,5 @@
 ---
-name: Agent Economy — Civic Weather Room
+name: Manyworld — Civic Weather Room
 description: A living economic city rendered as a precise, evidence-linked civic science instrument.
 colors:
   survey-navy: "#12233F"
@@ -74,13 +74,13 @@ components:
     padding: "16px"
 ---
 
-# Design System: Agent Economy — Civic Weather Room
+# Design System: Manyworld — Civic Weather Room
 
 ## Overview
 
 **Creative North Star: "The Civic Weather Room"**
 
-Agent Economy should feel like a daylit municipal observatory built to read a
+Manyworld should feel like a daylit municipal observatory built to read a
 living city: cool chart paper, powder-coated instrument housings, cadastral ink,
 translucent acetate overlays, and saturated signals that mean something
 specific. The city is not scenery. It is a spatial index into agents,
@@ -253,42 +253,30 @@ stamped, folded, or mounted, not inflated.
 - **States:** Loading, error, empty, selected, stale, historical, and disabled
   states retain their own text treatment; color is always paired with wording.
 
-### World Pulse
+### City home and evidence panels
 
-The default `/runs/:runId/overview` route is the **World Pulse** briefing. It
-pairs a committed regional atlas and a short salience-ranked event briefing
-with an evidence inspector and event timeline. The five primary Civic Atlas
-destinations are Pulse, City, People, Commons, and Evidence Lab; deeper
-workspaces remain available through the command palette without duplicating the
-permanent rail.
-
-World Pulse reads only the observer-scoped world projection and the public
-summary, alerts, and event envelope. It never reads event payloads. Evidence
-links require valid positive event identifiers, region links require valid
-positive region identifiers, and map marks require coordinates supplied by the
-projection. Missing coordinates are disclosed and left unplotted rather than
-replaced with a decorative position.
-
-Historical cursors are visibly read-only and never request or inherit current
-run status. Live Run, Pause, and Step controls fail closed until authoritative
-status is available, during a mutation, and after a terminal state. The
-briefing ranks attention; it does not assert causation without an evidence
-trace.
+City is the only local primary destination. `/`, `/observatory` and the old
+`overview` route resolve to it. The map and complete-day activity feed share the
+first surface; the feed gives native actions visible outcomes even when there
+are no external-agent submissions. The large workspace rail and Pulse briefing
+are retired. People, economy, organizations, markets, law, conversations and
+evidence open as contextual panels with one Back to City action and keyboard
+focus containment. Tools groups research and operator utilities. Connections
+groups onboarding and owned agents. Historical views hide current run controls
+and current-only balance summaries.
 
 ### Civic City
 
-The signature component is a shared operational city shell with three renderers:
-the code-native **Atlas**, a lazy-loaded deck.gl **2.5D Diorama** and **Recorded day**
-playback. All use
-the same named districts, filters, observer URL state, agent/place selection,
-evidence lens, and contiguous instrumentation rail. The Diorama adds extruded
-place and organization marks plus migration and trade paths; its building
-height and curved paths are explicitly labelled derived visual encodings, not
-canonical world geometry. Its City evidence variant uses a dark, full-field
-command-map treatment while retaining the project's survey typography and
-evidence labels. On desktop, the evidence lens is a bounded inspector overlay;
-below 980px, the selected mark surfaces in an immediate map action that leads
-to the full lens.
+Atlas, List, experimental 3D and capability-gated Recorded day share selection,
+filters, observation tick and the evidence lens. Atlas and 3D retain their own
+bounded camera positions in the same observer bookmark, including evidence-panel
+round trips, browser history and reload. Legacy 2.5D links remain readable
+but the redundant toggle is removed. The complete-day feed pages forty cards at
+a stable event high-water mark; totals and marker sets do not depend on that page.
+Pending requests, completed outcomes, rejections, cancellations and neutral
+records have separate text labels. 3D batches markers by outcome for bounded
+draw calls. Actual places and presence remain distinct from derived display
+slots. No renderer invents traffic or upgrades an old run's simulation profile.
 
 Actor-linked transects end in directional arrowheads. Markers animate only for
 real queued or in-flight provider activity; current-tick settlement and
@@ -311,7 +299,7 @@ the Atlas when WebGL2 or its lazy bundle is unavailable.
 
 WorldMonitor informed the layout grammar—dominant map, compact layers,
 coordinated activity, and evidence inspection—but no WorldMonitor source,
-assets, or dependencies are imported. Agent Economy remains MIT-licensed while
+assets, or dependencies are imported. Manyworld remains MIT-licensed while
 the reference project is AGPL-3.0-or-later.
 
 ### People and Living Agents

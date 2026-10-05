@@ -9,14 +9,14 @@ web
 ## Users
 
 The primary users are researchers and operators who run, observe, interrogate,
-and control live Agent Economy simulations. They need to understand both the
+and control live Manyworld simulations. They need to understand both the
 state of the economy and the activity of individual AI agents without losing
 the distinction between model proposals, validated actions, and settled
 economic effects.
 
 ## Product Purpose
 
-Agent Economy is an observable laboratory for studying how information,
+Manyworld is an observable laboratory for studying how information,
 beliefs, decisions, institutions, and markets interact inside a living
 miniature economy. World OS is its operator interface: it should make the world
 legible while it runs, support investigation across time and entities, and
@@ -61,7 +61,7 @@ World OS workspace routes are both part of the current product surface.
 
 ## Brand Commitments
 
-The product names **Agent Economy** and **World OS** are retained. The identity
+The public product name is **Manyworld** (formerly Agent Economy); **World OS** describes its integration surfaces. The identity
 should communicate a living world and a rigorous research instrument together;
 the redesign may replace the incumbent visual system and logo.
 

@@ -486,6 +486,7 @@ def test_served_acceptance_run_stays_observable_and_asks_at_exact_tick(tmp_path)
             assert time.monotonic() < deadline, (
                 f"served acceptance run did not reach tick 2 in time: {status}")
             time.sleep(0.05)
+        assert status["running"] is False, status
         assert status["tick"] == 2
         assert status["acceptance_orchestration"]["state"] == "completed"
         assert status["acceptance_orchestration"]["authorized"]
