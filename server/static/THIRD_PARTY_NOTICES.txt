@@ -2968,7 +2968,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ==============================================================================
-rolldown@1.2.3
+rolldown@1.2.8
 Declared license: MIT
 ==============================================================================
 MIT License
@@ -3184,7 +3184,7 @@ respective ISC and BSD licenses. Their complete license texts are reproduced
 in this notice under the corresponding d3 package entries.
 
 ==============================================================================
-vite@8.2.1
+vite@8.3.0
 Declared license: MIT
 ==============================================================================
 # Vite core license
