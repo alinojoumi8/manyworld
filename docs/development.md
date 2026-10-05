@@ -461,3 +461,20 @@ from the publisher's `quay.io/minio` registry; changing the registry does not
 upgrade the stored-data format or runtime version.
 Pull requests should state behavior, tests, live calls/cost,
 compatibility impact, and remaining risk. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## CircleCI release checks
+
+The connected `gh/alinojoumi8/manyworld` project uses `.circleci/config.yml`.
+Normal runs execute the provider-free smoke suite. To explicitly run the full
+Python 3.11 Linux suite, use the authenticated CLI:
+
+```bash
+circleci run trigger --project gh/alinojoumi8/manyworld --branch BRANCH --parameter full_suite=true
+```
+
+The full run uses the same deterministic sixteen-shard pytest plugin as the
+GitHub release matrix, with JUnit results and XML artifacts. No provider secrets,
+live model calls, deployment jobs, automatic retries, or default full-suite runs
+are configured. CircleCI supplements the existing GitHub cross-platform gates.
+Evaluate actual shard durations from this first run before changing fan-out;
+remove this config to roll back the additional CI workflow.
