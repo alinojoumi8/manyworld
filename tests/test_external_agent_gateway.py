@@ -211,6 +211,53 @@ def test_oauth_pkce_rotation_scope_reduction_expiry_and_revocation(
         world10.runtime.external.authenticate(pair["access_token"], rate_limit=False)
 
 
+def test_receipt_lookup_diagnostics_preserve_identity_and_do_not_resubmit(world10: World):
+    service = world10.runtime.external
+    created = _connection(world10)
+    other = _connection(world10, owner="owner-b")
+    auth = service.authenticate(created["credential"]["token"], rate_limit=False)
+    other_auth = service.authenticate(other["credential"]["token"], rate_limit=False)
+    turn = service.turn(auth)
+
+    def missing_receipt(identity, identifier):
+        count = world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions")
+        with pytest.raises(ExternalAgentError) as failure:
+            service.receipt(identity, identifier)
+        assert failure.value.status_code == 404
+        assert failure.value.code == "receipt_not_found"
+        assert world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions") == count
+
+    # An idempotency key is not a submission ID, before or after acceptance.
+    missing_receipt(auth, "diagnostic-turn-one")
+    queued = service.submit_action(auth, {
+        "target_tick": turn["target_tick"], "action": {"type": "do_nothing"},
+        "observed_projection_hash": turn["projection_hash"],
+        "idempotency_key": "diagnostic-turn-one",
+    })
+    intended_id = queued["submission_id"]
+    count = world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions")
+    assert service.receipt(auth, intended_id)["status"] == "queued"
+    missing_receipt(auth, "diagnostic-turn-one")
+    missing_receipt(other_auth, intended_id)
+    # A legitimate queued receipt exists immediately; it need not be re-submitted.
+    for _ in range(2):
+        assert service.receipt(auth, intended_id)["submission_id"] == intended_id
+    _, decisions = service.decisions_for_tick(turn["target_tick"])
+    world10.runtime.execute_decisions(turn["target_tick"], decisions)
+    executed = service.receipt(auth, intended_id)
+    assert executed["status"] == "executed"
+    assert executed["target_tick"] == turn["target_tick"]
+    assert len(executed["resulting_state_hash"]) == 64
+
+    world10.store.set_meta(tick=turn["target_tick"])
+    next_turn = service.turn(auth)
+    # Old context yields a valid historical receipt, not the next turn's outcome.
+    old_receipt = service.receipt(auth, intended_id)
+    assert old_receipt["target_tick"] < next_turn["target_tick"]
+    assert old_receipt == executed
+    assert world10.store.scalar("SELECT COUNT(*) FROM external_action_submissions") == count
+
+
 def test_turn_idempotency_execution_stale_rejection_and_safe_fallback(world10: World):
     created = _connection(world10)
     service = world10.runtime.external
