@@ -466,3 +466,10 @@ from the publisher's `quay.io/minio` registry; changing the registry does not
 upgrade the stored-data format or runtime version.
 Pull requests should state behavior, tests, live calls/cost,
 compatibility impact, and remaining risk. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Prospective JEV quality evaluation
+
+The [matched quality study protocol](plans/2026-10-05-jev-quality-study.md)
+predeclares seeds, horizons, metrics, correctness and economic gates for #101.
+It is preparation only; the approved live bounds and frozen extraction manifest
+are still required. Keep JEV-v4 opt-in and retain the historical diagnostics.
