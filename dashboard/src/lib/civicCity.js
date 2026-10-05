@@ -139,6 +139,8 @@ function asArray(value) {
 
 function mergeAgents(agents, map) {
   const merged = new Map();
+  const recordedPopulation = map?.population_summary?.resident_population != null;
+  const mappedIds = new Set(asArray(map?.agents ?? map?.core_agents).map(agent => String(agent.id)));
   asArray(map?.core_agents).forEach(agent => merged.set(String(agent.id), { ...agent }));
   asArray(map?.agents).forEach(agent => merged.set(String(agent.id), {
     ...(merged.get(String(agent.id)) || {}),
@@ -146,6 +148,7 @@ function mergeAgents(agents, map) {
   }));
   asArray(map?.presence)
     .filter(item => item?.agent_id != null && item?.slot === "business")
+    .filter(item => !recordedPopulation || mappedIds.has(String(item.agent_id)))
     .filter(item => merged.get(String(item.agent_id))?.population_tier !== "periphery")
     .forEach(item => {
       const key = String(item.agent_id);
@@ -165,9 +168,17 @@ function mergeAgents(agents, map) {
     });
   asArray(agents).forEach(agent => {
     const key = String(agent.id);
-    merged.set(key, { ...(merged.get(key) || {}), ...agent });
+    // A current /api/agents fallback must not add an outside identity or
+    // overwrite the selected day's canonical map location/residence.
+    if (recordedPopulation) {
+      if (mappedIds.has(key)) merged.set(key, { ...agent, ...(merged.get(key) || {}) });
+    } else {
+      merged.set(key, { ...(merged.get(key) || {}), ...agent });
+    }
   });
-  return [...merged.values()].filter(agent => agent?.id !== null && agent?.id !== undefined);
+  return [...merged.values()].filter(agent => agent?.id !== null && agent?.id !== undefined
+    && (!recordedPopulation || mappedIds.has(String(agent.id)))
+    && (!Object.hasOwn(agent, "modeled_residence") || agent.modeled_residence?.state === "resident"));
 }
 
 function pointInDistrict(agent, index, count, districtId) {
@@ -213,6 +224,7 @@ export function classifyEventLayer(event) {
 }
 
 export function eventActorIds(event) {
+  if (Array.isArray(event?.actor_ids)) return event.actor_ids.filter(id => Number.isSafeInteger(id) && id > 0);
   const ids = new Set();
   const visit = (value, key = "", depth = 0) => {
     if (depth > 3 || value === null || value === undefined) return;
@@ -305,7 +317,7 @@ export function deriveCityModel({
     group.forEach((agent, index) => {
       const observedX = normalizedCoordinate(agent.x);
       const observedY = normalizedCoordinate(agent.y);
-      const observed = observedX !== null && observedY !== null;
+      const observed = observedX !== null && observedY !== null && (!map || agent.place_id != null || agent.presence_source != null);
       if (observed) observedCount += 1;
       const point = observed
         ? { x: observedX, y: observedY }
@@ -313,8 +325,9 @@ export function deriveCityModel({
       const event = latestByAgent.get(String(agent.id)) || null;
       const runtimeActivity = runtimeByAgent.get(String(agent.id)) || null;
       const transitionEvent = event && Number(event.tick) === selectedTick ? event : null;
-      const transitionState = transitionEvent
-        ? String(transitionEvent.kind || "").toLowerCase() === "action_rejected"
+       const transitionState = transitionEvent
+         ? transitionEvent.outcome ? ({ completed: "settled", pending: "pending", rejected: "rejected", cancelled: "cancelled", recorded: "recorded" }[transitionEvent.outcome] || "recorded")
+         : String(transitionEvent.kind || "").toLowerCase() === "action_rejected"
           ? "rejected"
           : "settled"
         : null;
@@ -352,7 +365,8 @@ export function deriveCityModel({
     const point = observedX !== null && observedY !== null
       ? { x: observedX, y: observedY }
       : pointInDistrict({ id: `firm-${firm.id}` }, index, list.length, layer);
-    return { ...firm, ...point, layer };
+    return { ...firm, ...point, layer,
+      coordinateSource: observedX !== null && observedY !== null ? "observed" : "derived" };
   });
 
   const coordinateMode = observedCount === 0
@@ -431,6 +445,8 @@ export function deriveCityModel({
   const coreCount = Number(projectedPopulation.core
     ?? cityAgents.filter(agent => agent.population_tier !== "periphery").length);
   const population = {
+    ...(projectedPopulation.known_living_outside != null
+      ? { knownLivingOutside: projectedPopulation.known_living_outside } : {}),
     mode: map?.population_mode || "core",
     total: Number(projectedPopulation.total ?? cityAgents.length),
     core: coreCount,

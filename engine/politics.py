@@ -8,6 +8,7 @@ from typing import Any
 from .ledger import Ledger, SYS_GOV
 from .legal import LegalInstitution
 from .store import Store
+from .local_participation import is_local
 
 
 ALLOWED_POLICY_RULES = {
@@ -20,11 +21,12 @@ ALLOWED_POLICY_RULES = {
 
 class PoliticalEconomy:
     def __init__(self, store: Store, ledger: Ledger, legal: LegalInstitution,
-                 config: dict | None = None):
+                 config: dict | None = None, *, engine_semantics_version: int = 2):
         self.store = store
         self.ledger = ledger
         self.legal = legal
         self.config = config or {}
+        self.engine_semantics_version = engine_semantics_version
         self.enabled = config is not None and bool(self.config.get("enabled", True))
         # Persisted marker: markerless recorded runs retain their historical
         # authorization semantics during replay; all fresh base configs enable
@@ -177,6 +179,8 @@ class PoliticalEconomy:
         return {"ok": True, "bill_id": bill_id, "version": version, "status": "committee"}
 
     def committee_vote(self, tick: int, actor_id: int, bill_id: int, vote: str) -> dict[str, Any]:
+        if getattr(self, "ballots", None) and self.ballots.active(tick):
+            return self.ballots.cast_legislative(tick, actor_id, bill_id, "committee", vote)
         bill = self.store.query_one("SELECT * FROM bills WHERE id=?", (bill_id,))
         legislator = self._legislator_for_agent(actor_id)
         if not bill or bill["status"] != "committee" or not legislator:
@@ -200,6 +204,8 @@ class PoliticalEconomy:
         return {"ok": True, "bill_id": bill_id, "status": status, "yes": yes, "members": members}
 
     def cast_vote(self, tick: int, actor_id: int, bill_id: int, vote: str) -> dict[str, Any]:
+        if getattr(self, "ballots", None) and self.ballots.active(tick):
+            return self.ballots.cast_legislative(tick, actor_id, bill_id, "floor", vote)
         bill = self.store.query_one("SELECT * FROM bills WHERE id=?", (bill_id,))
         legislator = self._legislator_for_agent(actor_id)
         if not bill or bill["status"] not in {"floor_house", "floor_senate"} or not legislator:
@@ -227,6 +233,8 @@ class PoliticalEconomy:
 
     def executive_action(self, tick: int, actor_id: int, bill_id: int,
                          action: str, effective_delay_ticks: int = 1) -> dict[str, Any]:
+        if not is_local(self, actor_id):
+            return {"ok": False, "reason": "local executive authority required"}
         actor = self.store.query_one("SELECT role FROM agents WHERE id=? AND alive=1", (actor_id,))
         bill = self.store.query_one("SELECT * FROM bills WHERE id=?", (bill_id,))
         authorized_roles = ({"executive"} if self.actor_bound_authorization
@@ -297,6 +305,12 @@ class PoliticalEconomy:
                           actor_agent_id=actor_id, detail_json=json.dumps(detail, sort_keys=True))
 
     def _legislator_for_agent(self, agent_id: int):
+        if not is_local(self, agent_id):
+            return None
+        if self.engine_semantics_version >= 20:
+            return self.store.query_one(
+                "SELECT l.* FROM legislators l JOIN agents a ON a.id=l.agent_id "
+                "WHERE l.agent_id=? AND l.active=1 AND a.alive=1", (agent_id,))
         return self.store.query_one(
             "SELECT * FROM legislators WHERE agent_id=? AND active=1", (agent_id,))
 
@@ -323,6 +337,8 @@ class PoliticalEconomy:
 
     # ------------------------------------------------------------------ lobbying
     def lobby(self, tick: int, actor_id: int, data: dict[str, Any]) -> dict[str, Any]:
+        if not is_local(self, actor_id):
+            return {"ok": False, "reason": "local lobbyist or lawyer required"}
         actor = self.store.query_one("SELECT role FROM agents WHERE id=? AND alive=1", (actor_id,))
         if not actor or (actor["role"] or "") not in {"lobbyist", "lawyer"}:
             return {"ok": False, "reason": "registered lobbyist or lawyer required"}
@@ -374,10 +390,17 @@ class PoliticalEconomy:
 
     # ------------------------------------------------------------------ elections and effective rules
     def hold_election(self, tick: int, election_type: str = "legislative") -> dict[str, Any]:
+        if self.engine_semantics_version >= 21:
+            with self.store.savepoint("resident_federal_election"):
+                return self._hold_election(tick, election_type)
+        return self._hold_election(tick, election_type)
+
+    def _hold_election(self, tick: int, election_type: str) -> dict[str, Any]:
         voters = self.store.query(
             "SELECT a.id, a.political_lean, COALESCE(b.value,0) AS sentiment FROM agents a "
             "LEFT JOIN beliefs b ON b.agent_id=a.id AND b.key='sentiment' "
             "WHERE a.alive=1 AND a.age>=18 AND a.kind='citizen' ORDER BY a.id")
+        voters = [v for v in voters if is_local(self, int(v["id"]), tick=tick)]
         civic = enterprise = 0
         for voter in voters:
             score = -float(voter["political_lean"] or 0.0) - max(0.0, -float(voter["sentiment"])) * 0.25
@@ -386,8 +409,9 @@ class PoliticalEconomy:
             else:
                 enterprise += 1
         parties = self.store.query("SELECT id, name FROM political_parties ORDER BY id")
-        winner = int(parties[0]["id"] if civic >= enterprise else parties[1]["id"])
-        if election_type == "legislative":
+        empty = self.engine_semantics_version >= 21 and not voters
+        winner = None if empty else int(parties[0]["id"] if civic >= enterprise else parties[1]["id"])
+        if election_type == "legislative" and not empty:
             total = max(1, civic + enterprise)
             civic_house = round(self.house_seats * civic / total)
             civic_senate = round(self.senate_seats * civic / total)
@@ -401,11 +425,13 @@ class PoliticalEconomy:
                                       term_start_tick=tick,
                                       term_end_tick=tick + (self.house_interval if chamber == "house"
                                                             else self.house_interval * 3))
-        else:
+        elif not empty:
             self.store.record_metric(tick, "executive_party_id", winner)
         result = {"election_type": election_type, "civic_votes": civic,
                   "enterprise_votes": enterprise, "winner_party_id": winner,
                   "turnout": len(voters)}
+        if empty:
+            result["status"] = "no_resident_voters"
         election_id = self.store.insert("elections", tick=tick, election_type=election_type,
                                         results_json=json.dumps(result, sort_keys=True), turnout=len(voters))
         self.store.log_event(tick, "federal_election_held", {"election_id": election_id, **result},
@@ -414,6 +440,13 @@ class PoliticalEconomy:
         return result
 
     def run_nightly(self, tick: int) -> None:
+        if self.engine_semantics_version >= 21:
+            with self.store.savepoint("resident_political_nightly"):
+                self._run_nightly(tick)
+        else:
+            self._run_nightly(tick)
+
+    def _run_nightly(self, tick: int) -> None:
         if not self.enabled:
             return
         for row in self.store.query(
@@ -437,6 +470,8 @@ class PoliticalEconomy:
             self.store.log_event(tick, "policy_rule_effective", {"policy_rule_id": int(rule["id"]),
                 "rule_key": rule["rule_key"], "value": value, "bill_id": rule["bill_id"]},
                 phase="NIGHT_CLOSE", subject_type="bill", subject_id=rule["bill_id"], importance=3.5)
+        if getattr(self, "ballots", None) and self.ballots.active(tick):
+            return
         if self.house_interval > 0 and tick > 0 and tick % self.house_interval == 0:
             if not self.store.query_one(
                     "SELECT 1 FROM elections WHERE tick=? AND election_type='legislative'", (tick,)):
