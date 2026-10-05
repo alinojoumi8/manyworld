@@ -896,6 +896,9 @@ def install_external_routes(app: FastAPI, world, *, hosted_safe: bool = False,
             return _jsonrpc_error(request_id, -32602, "Invalid params")
 
     @app.get("/mcp")
+    @app.delete("/mcp")
     async def mcp_stream_not_enabled(request: Request):
+        # This POST-only transport has no SSE stream or terminable server
+        # session. Both optional probes still require valid credentials.
         auth(request)
         return Response(status_code=405, headers={"Allow": "POST", "Cache-Control": "no-store"})
