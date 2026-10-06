@@ -18,6 +18,9 @@ test('City is home; full-day pagination, outcomes and actor filters share map se
   await page.getByRole('button',{name:'List',exact:true}).click();
   await expect(page.getByLabel('Keyboard explorer')).toHaveValue('agent:125');
   await activity.getByLabel('Agent',{exact:true}).selectOption('125');
+  // Check at the filter boundary: losing the view here also corrupts the
+  // Evidence bookmark even if the selected agent remains unchanged.
+  await expect(page).toHaveURL(/view=list/);
   await expect(activity.getByLabel('Day activity totals')).toContainText('1 events');
   await expect(page.getByLabel('Keyboard explorer').locator('optgroup[label="Agents"] option')).toHaveCount(1);
   await activity.getByRole('button',{name:'Inspect this day'}).click();
