@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { workspaceApi } from '../app/api';
+import { RunReportNotice, type RunReportState } from '../components/RunReportNotice';
 import { inferenceMode } from '../lib/inferenceMode.js';
 
-type RunStatus={run_id:string;status:string;tick:number;running:boolean;remaining_ticks?:number|null;provider_readiness?:any};
+type RunStatus=RunReportState & {run_id:string;status:string;tick:number;running:boolean;remaining_ticks?:number|null;provider_readiness?:any};
 export function CityRunControls({runId,stale,participantActive=false,hasQueuedAction=false}:{runId:string;stale:boolean;participantActive?:boolean;hasQueuedAction?:boolean}){
   const client=useQueryClient(),[busy,setBusy]=useState(''),[error,setError]=useState('');
   const pending=useRef(new Set<string>());
@@ -35,5 +36,6 @@ export function CityRunControls({runId,stale,participantActive=false,hasQueuedAc
     {query.isError&&<span role="alert">Run status unavailable.</span>}
     {participantActive&&<span>{hasQueuedAction?'Citizen action queued. Advance one tick to resolve it.':'Queue a citizen action (including Do nothing) before advancing.'} Release the citizen to use continuous Run.</span>}
     {error&&<p role="alert">{error}</p>}
+    <RunReportNotice status={status} />
   </div>;
 }
