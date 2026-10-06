@@ -86,12 +86,10 @@ export function useObserverViewState(): [
 ] {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
-  const pendingParams = useRef(params);
   const renderedLocation = useRef(location);
   const search = params.toString();
   if (renderedLocation.current !== location) {
     renderedLocation.current = location;
-    pendingParams.current = params;
   }
   const state = useMemo(() => parseObserverViewState(params), [params]);
   const patch = useCallback((
@@ -103,13 +101,15 @@ export function useObserverViewState(): [
     // not restore its URL. Interactive updates (including an ongoing drag)
     // continue to accumulate against the latest pending parameters.
     if (window.location.pathname !== location.pathname) return;
+    // Router navigation updates browser history before its deferred render.
+    // An intermediate render or another hook instance can still hold older
+    // params, so compose interactive updates against the current browser URL.
+    const browserParams = new URLSearchParams(window.location.search);
     if (options.onlyIfCurrent) {
       if (renderedLocation.current !== location) return;
-      const browserSearch = new URLSearchParams(window.location.search).toString();
-      if (browserSearch !== search || pendingParams.current.toString() !== search) return;
+      if (browserParams.toString() !== search) return;
     }
-    const next = patchObserverViewState(pendingParams.current, update);
-    pendingParams.current = next;
+    const next = patchObserverViewState(browserParams, update);
     setParams(next, { replace: options.replace });
   }, [location, search, setParams]);
   return [state, patch];

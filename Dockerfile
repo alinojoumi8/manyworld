@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
+# Match the SQLite aggregation runtime validated by the frozen golden replay.
+# Historical artifacts may require their original pinned runtime instead.
+ARG PYTHON_RUNTIME_IMAGE=python:3.12.15-slim-trixie@sha256:02108f5d322dd89f1c9e552442c25acb0543dfdbc455693a5599624f20d9155d
+
 FROM node:22-bookworm-slim AS dashboard-build
 WORKDIR /src
 COPY dashboard/package.json dashboard/package-lock.json ./dashboard/
@@ -8,7 +12,7 @@ COPY dashboard ./dashboard
 COPY server/static ./server/static
 RUN npm run build --prefix dashboard
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM ${PYTHON_RUNTIME_IMAGE} AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \

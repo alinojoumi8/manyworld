@@ -473,6 +473,20 @@ for important failure/recovery logs.
 
 ## CI and review
 
+The application Docker runtime is digest-pinned to Python 3.12.15 on Debian
+Trixie (SQLite 3.46.1). The former Bookworm runtime (SQLite 3.40.1) produces
+different floating-point sentiment aggregates in the preserved semantics-5
+golden replay. The Trixie runtime passes that exact fixture and the semantics-1
+and semantics-2 replay/source-immutability checks; no metric tolerance or stored
+source data is changed. Build it with `docker build -t manyworld:local .`.
+
+Historical artifacts must retain the runtime that produced them. The
+`PYTHON_RUNTIME_IMAGE` build argument accepts an explicitly chosen image from
+the original run's runtime receipt, including its digest. Validate replay in
+that runtime before resuming a historical run. Updating the default image does
+not migrate run databases or establish compatibility with every older SQLite
+aggregation implementation. Keep the original image and source artifacts.
+
 GitHub Actions builds the dashboard on Node.js 22 and runs Python 3.11/3.12 on
 Ubuntu and Windows. Every PR also runs a single deterministic shard of the
 engine/world/agents-focused tests via `scripts/pytest_shard.py`, so edits to
@@ -515,3 +529,32 @@ maintenance. Production still needs an explicitly owned update process or a
 maintained S3 service. Preserve existing object-store volumes and verify the
 upgrade/rollback before using the newer server revision on existing data. No
 volume migration or deployment is performed by the build commands.
+
+## CircleCI release checks
+
+The connected `gh/alinojoumi8/manyworld` project uses `.circleci/config.yml`.
+The executor pins Python 3.11.17 on Debian Trixie by image digest, including
+SQLite 3.46.1. The previous `cimg/python:3.11` image used SQLite 3.37.2 and
+reproduced different floating-point sentiment aggregates in the preserved
+semantics-5 golden replay. Keep that fixture and its exact comparison intact;
+validate a replacement runtime against it before updating the image pin.
+Normal runs execute the provider-free smoke suite. To explicitly run the full
+Python 3.11 Linux suite, use the authenticated CLI:
+
+```bash
+circleci run trigger --project gh/alinojoumi8/manyworld --branch BRANCH --parameter full_suite=true
+```
+
+The full run uses the same deterministic sixteen-shard pytest plugin as the
+GitHub release matrix, with JUnit results and XML artifacts. No provider secrets,
+live model calls, deployment jobs, automatic retries, or default full-suite runs
+are configured. CircleCI supplements the existing GitHub cross-platform gates.
+Evaluate actual shard durations from this first run before changing fan-out;
+remove this config to roll back the additional CI workflow.
+
+## Prospective JEV quality evaluation
+
+The [matched quality study protocol](plans/2026-10-05-jev-quality-study.md)
+predeclares seeds, horizons, metrics, correctness and economic gates for #101.
+It is preparation only; the approved live bounds and frozen extraction manifest
+are still required. Keep JEV-v4 opt-in and retain the historical diagnostics.
