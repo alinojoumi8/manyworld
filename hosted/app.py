@@ -39,8 +39,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from agents.external_contract import ExternalAgentError, hash_external_credential
 from engine.storage_policy import StorageBudgetExceeded
 from hosted.auth import AuthFailure
-from server.request_limits import OAuthRegistrationLimitMiddleware
 from hosted.catalog import CatalogConflict
+from server.request_limits import OAuthRegistrationLimitMiddleware
 from hosted.security import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
