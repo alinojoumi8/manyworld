@@ -1,0 +1,77 @@
+version: 2.1
+
+parameters:
+  full_suite:
+    type: boolean
+    default: false
+
+executors:
+  python311:
+    docker:
+      # Keep the SQLite aggregation runtime used by the exact golden replay.
+      - image: python:3.11.17-trixie@sha256:27e044f7e01fea05c1760324d58fc5360a0767b9ef098e74ddaf8c70b8f46d26
+    resource_class: medium
+
+commands:
+  install_locked:
+    steps:
+      - checkout
+      - run:
+          name: Install hash-locked offline test dependencies
+          command: python -m pip install --require-hashes -r requirements.lock
+      - run:
+          name: Verify environment and sources
+          command: |
+            python -m pip check
+            python -c "import sys, sqlite3; print(sys.version); print('SQLite', sqlite3.sqlite_version)"
+            python -m compileall -q agents engine hosted llm oracle reports research server world run.py
+      - run: mkdir -p test-results
+
+jobs:
+  smoke:
+    executor: python311
+    steps:
+      - install_locked
+      - run:
+          name: Gateway, export, documentation and exact replay smoke
+          command: >
+            python -m pytest -q
+            tests/test_documentation.py tests/test_external_agent_gateway.py
+            tests/test_research_export.py tests/test_prd_completion.py
+            tests/test_recorded_replay_golden.py
+            --junitxml=test-results/smoke.xml -o junit_family=legacy
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+  full_suite:
+    executor: python311
+    # Match the existing GitHub full-suite partition. Serial and eight-way
+    # runs exceed the existing release time budget; retain every test case.
+    parallelism: 16
+    steps:
+      - install_locked
+      - run:
+          name: Verify frozen research datasets
+          command: python run.py --verify-datasets config/data-manifest.yaml
+      - run:
+          name: Run full offline suite shard
+          no_output_timeout: 30m
+          command: |
+            python -m pytest tests/ -q -p scripts.pytest_shard \
+              --ci-shard-index "$CIRCLE_NODE_INDEX" --ci-shard-count "$CIRCLE_NODE_TOTAL" \
+              --junitxml="test-results/full-${CIRCLE_NODE_INDEX}.xml" -o junit_family=legacy
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+workflows:
+  focused_checks:
+    unless: << pipeline.parameters.full_suite >>
+    jobs:
+      - smoke
+  release_full_suite:
+    when: << pipeline.parameters.full_suite >>
+    jobs:
+      - full_suite
