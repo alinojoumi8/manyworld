@@ -118,6 +118,8 @@ function constructionStage(project) {
 function statusCopy(status, connected, tick, historical) {
   if (historical) return `Historical tick ${tick}`;
   if (!connected) return "Connection unavailable";
+  if (status === "unavailable") return "Run status unavailable";
+  if (["active", "running"].includes(status)) return "Run running";
   if (["finished", "completed"].includes(status)) return "Run finished";
   if (status === "halted") return "Run halted";
   if (["failed", "error"].includes(status)) return "Run failed";
@@ -582,7 +584,7 @@ export function CivicCity(props) {
         <span>Projection</span>
         <div>
           <button type="button" aria-pressed={cityView === "atlas"} onClick={() => changeView("atlas")}>Atlas</button>
-          {onObserverStateChange && props.recordedAvailable && <button type="button" aria-pressed={cityView === "recorded"} onClick={() => changeView("recorded")}>Recorded day</button>}
+          {onObserverStateChange && <button type="button" disabled={!props.recordedAvailable} aria-pressed={cityView === "recorded"} onClick={() => changeView("recorded")}>Recorded day</button>}
           {props.render3d && <button type="button" aria-pressed={cityView === "3d"} onClick={() => changeView("3d")}>3D · experimental</button>}
           {onObserverStateChange && <button type="button" aria-pressed={cityView === "list"} onClick={() => changeView("list")}>List</button>}
         </div>
@@ -1153,7 +1155,7 @@ export function CivicCity(props) {
           {lineage && <small>Semantics {lineage.semantics} · projection {lineage.projection} · policy {lineage.policy}</small>}
           {historical && <small>City evidence resolves at tick {tick}; live runtime overlays are disabled.</small>}
           {!historical && selected?.runtimeActivity && <small>Live activity is ephemeral observer telemetry. It is not a thought trace or committed world state.</small>}
-          <small>City selection is observer-only. Ledger and replay truth remain immutable.</small>
+          <small>City selection is observer-only. Atlas markers are separated for selection; use evidence for recorded locations. Ledger and replay truth remain immutable.</small>
         </footer>
       </aside>
     </div>

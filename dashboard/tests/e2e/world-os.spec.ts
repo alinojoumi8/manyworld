@@ -477,6 +477,20 @@ async function mockApi(page: Page) {
 
 test.beforeEach(async ({ page }) => { await installSocket(page); await mockApi(page); });
 
+test("Live status follows the clock during an uncommitted day", async ({page}) => {
+  await page.route("**/api/run/status",route=>route.fulfill({json:{run_id:'run-demo',tick:6,status:'running',running:true}}));
+  await page.goto('/runs/run-demo/world?view=atlas');
+  await expect(page.locator('.civic-city__scene-status')).toHaveText('Run running');
+  await page.goto('/runs/run-demo/world?view=atlas&tick=6');
+  await expect(page.locator('.civic-city__scene-status')).toHaveText('Historical tick 6');
+});
+
+test("Live status cannot borrow another run's clock", async ({page}) => {
+  await page.route("**/api/run/status",route=>route.fulfill({json:{run_id:'other-run',tick:6,status:'running',running:true}}));
+  await page.goto('/runs/run-demo/world?view=atlas');
+  await expect(page.locator('.civic-city__scene-status')).toHaveText('Run status unavailable');
+});
+
 test("outside population history keeps finances visible and restores city focus on return", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

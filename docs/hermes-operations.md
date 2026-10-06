@@ -13,6 +13,17 @@ The ongoing session is taken from that invocation's CLI session receipt,
 not the newest database conversation; Desktop chats and connection checks
 cannot silently replace the citizen's ongoing conversation.
 
+A wake stops its owned Hermes process tree once the API confirms a durable
+queued receipt and the profile database identifies the session containing that
+exact wake's unique prompt and its saved queued submission tool response. This prevents post-submission tool loops from
+exhausting the iteration budget. Receipt checks are limited to once per second.
+Rejected receipts, ambiguous sessions, and missing session proof retain the
+normal timeout; they cannot trigger a successful stop. The attempt result marks
+`receipt_complete` separately from a normal CLI exit. Only the owned process
+tree is stopped, and cleanup must complete before another dispatch.
+See [the 100-Hermes follow-up](live-test-fixes-2026-10-06.md) for validation and
+the separate banking-capacity finding.
+
 A completed model turn without a queued action receives up to two corrective
 wakes in the same citizen session. Each wake requests a fresh `ae_turn_wait`
 envelope and requires the complete observation hash. Existing queued receipts

@@ -85,7 +85,8 @@
 .city-financial-grid > * { grid-column:auto; min-width:0; }
 @media(max-width:750px) { .city-financial-grid { grid-template-columns:1fr; } }
 .city-shell :focus-visible { outline:2px solid #2457d6; outline-offset:3px; }
-.civic-city__agent.is-pending,.civic-city__agent.is-recorded { color:#896629; }
+.civic-city__agent.is-pending { color:#11191a; }
+.civic-city__agent.is-recorded { color:#fff; }
 @media (min-width:1700px) {
   .city-stage { grid-template-columns:minmax(0,1fr) 380px; }
   .city-stage .civic-city__workfield { grid-template-columns:minmax(0,1fr) 310px; }
@@ -104,7 +105,7 @@
   .city-shell .city3d-run-controls button { flex:1; min-width:80px; }
   .city-context-actions { gap:6px; }
   .city-context-actions a { font-size:11px; padding:8px; }
-  .city-stage .civic-city__atlas { min-height:360px; }
+  .city-stage .civic-city__atlas { min-height:620px; }
   .city3d--embedded .city3d-canvas { height:390px; }
   .city-panel-backdrop { padding:6px; }
   .city-detail-panel { padding-inline:12px; }
