@@ -615,7 +615,10 @@ test("camera controls and follow remain reachable on a reduced-motion phone with
   await mockCity(page);
   await page.goto("/runs/run-demo/world?tick=3&agent=1");
   const follow = page.getByRole("button", { name: "Follow person", exact: true });
-  await follow.focus(); await page.keyboard.press("Enter");
+  await expect(follow).toBeEnabled();
+  await follow.focus();
+  await expect(follow).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "Stop following", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Pan city right", exact: true }).click();
   expect(new URL(page.url()).searchParams.has("follow")).toBe(false);
