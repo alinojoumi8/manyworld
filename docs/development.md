@@ -502,3 +502,10 @@ live model calls, deployment jobs, automatic retries, or default full-suite runs
 are configured. CircleCI supplements the existing GitHub cross-platform gates.
 Evaluate actual shard durations from this first run before changing fan-out;
 remove this config to roll back the additional CI workflow.
+
+## Prospective JEV quality evaluation
+
+The [matched quality study protocol](plans/2026-10-05-jev-quality-study.md)
+predeclares seeds, horizons, metrics, correctness and economic gates for #101.
+It is preparation only; the approved live bounds and frozen extraction manifest
+are still required. Keep JEV-v4 opt-in and retain the historical diagnostics.
