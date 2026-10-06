@@ -3319,6 +3319,7 @@ body::before {
 .civic-city__activity--settled { background: #254a2e !important; }
 .civic-city__activity--rejected { background: #572725 !important; }
 
+.civic-city--world-os .civic-city__activity:is(.civic-city__activity--thinking, .civic-city__activity--queued, .civic-city__activity--settled, .civic-city__activity--rejected) small,
 .civic-city__activity--thinking > span,
 .civic-city__activity--thinking strong,
 .civic-city__activity--thinking small,

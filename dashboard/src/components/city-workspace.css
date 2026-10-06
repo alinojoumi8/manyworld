@@ -3,6 +3,10 @@
 .civic-city:not(.civic-city--compact) .civic-city__instrument-details > summary { display: none; }
 .civic-city__instrument-details > summary { padding: .8rem; cursor: pointer; }
 .city-map-tools { position: relative; z-index: 20; }
+@media (min-width: 601px) and (max-width: 1199px) {
+  .world-os-world-workspace .civic-city__view-toggle,
+  .world-os-world-workspace .civic-city__filter-panel { flex-basis: 100%; }
+}
 
 
 

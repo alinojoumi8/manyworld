@@ -90,16 +90,23 @@ def _owned_hermes_children(parent):
     return owned
 
 
-def _run_linux_hermes_process(command, *, timeout, **kwargs):
+def _run_linux_hermes_process(command, *, timeout, completion_check=None, **kwargs):
     # A separate process owns each subreaper, so concurrent Hermes workers
     # cannot adopt or terminate one another's descendants.
     with tempfile.TemporaryDirectory(prefix="ae-hermes-guardian-") as directory:
         result_path = Path(directory) / "result.json"
+        completed_path = Path(directory) / "completed"
         guardian = Path(__file__).with_name("hermes_process_guardian.py")
         process = subprocess.Popen([sys.executable, str(guardian), "--result",
-            str(result_path), "--timeout", str(timeout), "--", *command], **kwargs)
+            str(result_path), "--timeout", str(timeout), "--completed", str(completed_path), "--", *command], **kwargs)
         try:
-            process.wait(timeout=timeout + 20)
+            deadline = time.monotonic() + timeout + 20
+            while process.poll() is None:
+                if completion_check is not None and not completed_path.exists() and completion_check():
+                    completed_path.touch()
+                time.sleep(0.1)
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(command, timeout + 20)
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -114,15 +121,17 @@ def _run_linux_hermes_process(command, *, timeout, **kwargs):
         result = read_json(result_path)
         if result["state"] == "timed_out":
             raise HermesCallTimeout(f"Hermes call exceeded {timeout} seconds")
-        if result["state"] != "complete":
+        if result["state"] not in {"complete", "receipt_complete"}:
             raise RuntimeError("Hermes process cleanup or launch failed; refusing another dispatch")
-        return subprocess.CompletedProcess(command, result["returncode"])
+        completed = subprocess.CompletedProcess(command, result["returncode"])
+        completed.receipt_complete = result["state"] == "receipt_complete"
+        return completed
 
 
-def run_hermes_process(command, *, timeout, **kwargs):
+def run_hermes_process(command, *, timeout, completion_check=None, **kwargs):
     """Track Windows venv children so a timeout cannot leave a second citizen acting."""
     if LINUX_GUARDIAN:
-        return _run_linux_hermes_process(command, timeout=timeout, **kwargs)
+        return _run_linux_hermes_process(command, timeout=timeout, completion_check=completion_check, **kwargs)
     process = psutil.Popen(command, **kwargs)
     # Popen retains its own process handle even if a fast launcher has already
     # exited. Do not require a new OS creation-time lookup for that root.
@@ -140,6 +149,10 @@ def run_hermes_process(command, *, timeout, **kwargs):
             returncode = process.poll()
             if returncode is not None:
                 return subprocess.CompletedProcess(command, returncode)
+            if completion_check is not None and completion_check():
+                completed = subprocess.CompletedProcess(command, 0)
+                completed.receipt_complete = True
+                return completed
             if time.monotonic() >= deadline:
                 raise HermesCallTimeout(f"Hermes call exceeded {timeout} seconds")
             time.sleep(0.1)
@@ -358,6 +371,7 @@ class CohortOperator:
         attempt_id = f"tick-{tick}-attempt-{attempt}-{time.time_ns()}"
         prompt = output / f"{attempt_id}.txt"
         prompt.write_text(
+            f"Operator wake ID: {attempt_id}. "
             f"You are {citizen['name']}, a persistent Agent Economy citizen. {citizen['goal']} "
             f"Continue your own saved life and prior plans. Target tick {tick}. "
             "Use only agent_economy MCP tools. Read identity and the receipt for your previous action if available. "
@@ -373,7 +387,8 @@ class CohortOperator:
             "or essential purchases based on your own goals and affordability. Frontier actions appear only when available; "
             "you may choose a meaningful unique name for a new settlement. Read action "
             "schemas; never invent parameters. If already queued, do not duplicate it. Do not publish posts or send "
-            "messages, including say_public or Commons writes. Do not advance the world. End with your receipt ID "
+            "messages, including say_public or Commons writes. Do not advance the world. A queued submission response "
+            "is the confirmation: stop calling tools immediately after it. End with your receipt ID "
             "and a short plan to carry into the next day. The operator executes the day after all citizens finish.", encoding="utf-8")
         model = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))["model"]
         command = [str(self.hermes), "-m", "hermes_cli.main", "--profile", citizen["profile"],
@@ -395,9 +410,42 @@ class CohortOperator:
         env["PYTHONIOENCODING"] = "utf-8"
         log_path = output / f"{attempt_id}.log"
         timed_out = False
+        receipt_session = None
+        next_receipt_check = 0.0
+        def completed_receipt():
+            nonlocal receipt_session, next_receipt_check
+            now = time.monotonic()
+            if now < next_receipt_check:
+                return False
+            next_receipt_check = now + 1.0
+            # A durable queued action is the completion boundary. Bind this
+            # invocation by its unique prompt before stopping its process tree;
+            # unrelated Desktop sessions must never replace the citizen's session.
+            try:
+                with sqlite3.connect(f"file:{(home / 'state.db').as_posix()}?mode=ro", uri=True) as db:
+                    rows = db.execute("SELECT m.session_id,m.id FROM messages m "
+                        "JOIN sessions s ON s.id=m.session_id WHERE m.role='user' "
+                        "AND instr(m.content,?)>0", (f"Operator wake ID: {attempt_id}.",)).fetchall()
+                    if len(rows) != 1:
+                        return False
+                    submissions = db.execute("SELECT content FROM messages WHERE session_id=? "
+                        "AND id>? AND role='tool' AND tool_name='mcp__agent_economy__ae_action_submit'",
+                        rows[0]).fetchall()
+                # Preserve the submission's tool response before ending the CLI,
+                # so the resumed conversation has no unfinished submission call.
+                if not any(re.search(r'"status"\s*:\s*"queued"', re.sub(r'\\+"', '"', str(row[0])))
+                           for row in submissions):
+                    return False
+                if len(rows) != 1 or not any(row["status"] == "queued" for row in self.receipts(citizen, tick)):
+                    return False
+                receipt_session = rows[0][0]
+                return True
+            except (sqlite3.Error, httpx.HTTPError):
+                return False  # Missing proof retains the normal bounded timeout.
         with log_path.open("w", encoding="utf-8") as log:
             try:
-                result = run_hermes_process(command, cwd=home, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=240)
+                result = run_hermes_process(command, cwd=home, env=env, stdout=log, stderr=subprocess.STDOUT,
+                    timeout=240, completion_check=completed_receipt)
             except HermesCallTimeout:
                 timed_out = True
                 result = subprocess.CompletedProcess(command, -1)
@@ -417,7 +465,7 @@ class CohortOperator:
         # invocation, never the latest row in the shared profile database.
         transcript = re.sub(r"\x1b\[[0-9;]*m", "", log_path.read_text(encoding="utf-8", errors="replace"))
         session_ids = re.findall(r"Session:\s+([a-zA-Z0-9_-]+)", transcript)
-        session_id = session_ids[-1] if session_ids else (read_json(session)["session_id"] if session.exists() else None)
+        session_id = receipt_session or (session_ids[-1] if session_ids else (read_json(session)["session_id"] if session.exists() else None))
         with sqlite3.connect(f"file:{(home / 'state.db').as_posix()}?mode=ro", uri=True) as db:
             row = db.execute("SELECT id FROM sessions WHERE id=?", (session_id,)).fetchone()
             if row:
@@ -430,6 +478,7 @@ class CohortOperator:
                         f"{result.returncode}; inspect {log_path}")
         print(f"{citizen['name']}: queued tick {tick}", flush=True)
         return {"exit_code": result.returncode, "timed_out": timed_out,
+                "receipt_complete": bool(getattr(result, "receipt_complete", False)),
                 "session_id": session_id, "log": str(log_path)}
 
     def run(self):
