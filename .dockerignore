@@ -24,6 +24,7 @@ loop-*.md
 tmp
 .tmp
 graft
+test-results
 dashboard/test-results
 dashboard/playwright-report
 deploy/hostinger/secrets
@@ -31,8 +32,3 @@ data/backups
 .hosted-runs
 .hosted-artifacts
 .hosted-snapshots
-.tmp
-graft
-test-results
-dashboard/test-results
-dashboard/playwright-report
