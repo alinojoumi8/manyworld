@@ -1,7 +1,7 @@
-import { StrictMode } from "react";
+import { StrictMode, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createBrowserRouter } from "react-router";
+import { createBrowserRouter, useLocation } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import "./design/tokens.css";
 import App from "./App";
@@ -19,7 +19,20 @@ const queryClient = new QueryClient({
     queries: { staleTime: 1_000, retry: 1, refetchOnWindowFocus: false },
   },
 });
-const router = createBrowserRouter([{ path: "*", element: <App /> }]);
+function RouteScrollReset() {
+  const { pathname } = useLocation();
+  // Only changing pages resets the viewport. Query-only city selections own
+  // their focus/scroll behavior and must not be overwritten by restoration.
+  useLayoutEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [pathname]);
+  return null;
+}
+
+const router = createBrowserRouter([{ path: "*", element: <>
+  <App />
+  <RouteScrollReset />
+</> }]);
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
