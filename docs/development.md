@@ -481,6 +481,28 @@ upgrade the stored-data format or runtime version.
 Pull requests should state behavior, tests, live calls/cost,
 compatibility impact, and remaining risk. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+## CircleCI release checks
+
+The connected `gh/alinojoumi8/manyworld` project uses `.circleci/config.yml`.
+The executor pins Python 3.11.17 on Debian Trixie by image digest, including
+SQLite 3.46.1. The previous `cimg/python:3.11` image used SQLite 3.37.2 and
+reproduced different floating-point sentiment aggregates in the preserved
+semantics-5 golden replay. Keep that fixture and its exact comparison intact;
+validate a replacement runtime against it before updating the image pin.
+Normal runs execute the provider-free smoke suite. To explicitly run the full
+Python 3.11 Linux suite, use the authenticated CLI:
+
+```bash
+circleci run trigger --project gh/alinojoumi8/manyworld --branch BRANCH --parameter full_suite=true
+```
+
+The full run uses the same deterministic sixteen-shard pytest plugin as the
+GitHub release matrix, with JUnit results and XML artifacts. No provider secrets,
+live model calls, deployment jobs, automatic retries, or default full-suite runs
+are configured. CircleCI supplements the existing GitHub cross-platform gates.
+Evaluate actual shard durations from this first run before changing fan-out;
+remove this config to roll back the additional CI workflow.
+
 ## Prospective JEV quality evaluation
 
 The [matched quality study protocol](plans/2026-10-05-jev-quality-study.md)
