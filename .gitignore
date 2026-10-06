@@ -19,6 +19,7 @@ data/runs/oracle-locks/
 data/runs/oracle-pending/
 # Database backups (generated, large binaries) — keep data/runs DB ignores above intact.
 data/backups/
+*.ae.zip
 data/checkpoints/
 data/control-plane/
 data/counterfactuals/
@@ -44,6 +45,10 @@ graphify-out/
 .worktrees/
 logs/
 tmp/
+deploy/hostinger/secrets/
+.hosted-runs/
+.hosted-artifacts/
+.hosted-snapshots/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
