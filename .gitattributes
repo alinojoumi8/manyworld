@@ -8,6 +8,9 @@ dashboard/index.html text eol=lf
 server/static/index.html text eol=lf
 # The generated Three.js chunk embeds upstream GLSL shader whitespace verbatim.
 server/static/assets/CityViewport-*.js whitespace=-trailing-space,-space-before-tab
+# Deck.gl/Luma chunks also preserve upstream GLSL template whitespace.
+server/static/assets/CivicDiorama-*.js whitespace=-trailing-space,-space-before-tab
+server/static/assets/webgl-*.js whitespace=-trailing-space,-space-before-tab
 
 # Blender provenance hashes use identical source bytes on every platform.
 city/blender/*.py text eol=lf
