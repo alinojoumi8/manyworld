@@ -48,7 +48,7 @@ def reap_children(timeout=10):
         time.sleep(0.01)
 
 
-def supervise(command, timeout):
+def supervise(command, timeout, completed_path=None):
     def interrupted(_signum, _frame):
         raise InterruptedError("Hermes guardian interrupted")
 
@@ -60,8 +60,21 @@ def supervise(command, timeout):
         contain_children()
         process = subprocess.Popen(command)
         try:
-            code = process.wait(timeout=timeout)
-            result = {"state": "complete", "returncode": code}
+            deadline = time.monotonic() + timeout
+            while True:
+                if completed_path is not None and completed_path.exists():
+                    result = {"state": "receipt_complete", "returncode": 0}
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    code = process.wait(timeout=min(0.1, remaining))
+                    result = {"state": "complete", "returncode": code}
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
         except subprocess.TimeoutExpired:
             result = {"state": "timed_out"}
     except BaseException as exc:
@@ -85,14 +98,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--result", type=Path, required=True)
     parser.add_argument("--timeout", type=float, required=True)
+    parser.add_argument("--completed", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("A Hermes command is required")
-    result = supervise(command, args.timeout)
+    result = supervise(command, args.timeout, args.completed)
     args.result.write_text(json.dumps(result), encoding="utf-8")
-    return 0 if result["state"] in {"complete", "timed_out"} else 1
+    return 0 if result["state"] in {"complete", "receipt_complete", "timed_out"} else 1
 
 
 if __name__ == "__main__":
