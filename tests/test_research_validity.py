@@ -295,6 +295,39 @@ def test_grounded_prompt_labels_authoritative_facts_and_stale_memories(tmp_path)
     world.close()
 
 
+@pytest.mark.parametrize("enabled,tick", [
+    (True, 4), (False, 5), (None, 5), ("false", 5), (True, 5),
+])
+def test_reserved_belief_context_requires_opt_in_and_activation(tmp_path, enabled, tick):
+    world = _world(tmp_path, "reserved-context.db")
+    world.config["beliefs"]["model_grounding_from_tick"] = 5
+    if enabled is not None:
+        world.config["beliefs"]["prioritize_reserved_belief_context"] = enabled
+    citizen = world.store.query_one(
+        "SELECT * FROM agents WHERE kind='citizen' AND role IS NULL ORDER BY id LIMIT 1"
+    )
+    context = world.runtime.ctx.build(citizen, tick)
+    context["state"]["bank_id"] = 12
+    context["beliefs"] = {
+        **{f"custom:{index}": 0.25 for index in range(8)},
+        **{f"trust:bank:{index}": 0.7 for index in range(1, 13)},
+        "sentiment": 0.4,
+        "inflation_expectation": 0.02,
+    }
+    original = dict(context["beliefs"])
+    _, prompt = world.runtime.ctx.render_prompt(context)
+    line = next(line for line in prompt.splitlines() if line.startswith("[BELIEFS]"))
+    displayed = [item.split("=", 1)[0] for item in line.removeprefix("[BELIEFS] ").split(", ")]
+    assert len(displayed) == 8
+    if enabled is True and tick >= 5:
+        assert displayed[:3] == ["trust:bank:12", "sentiment", "inflation_expectation"]
+        assert not any(key.startswith("custom:") for key in displayed)
+    else:
+        assert displayed == list(original)[:8]
+    assert context["beliefs"] == original
+    world.close()
+
+
 def test_model_reasoning_is_grounded_publicly_while_raw_call_remains_auditable(
         tmp_path):
     world = _world(tmp_path, "grounded-reasoning.db")
