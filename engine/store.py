@@ -25,6 +25,17 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _quote_identifier(identifier: str) -> str:
+    """Return a safely quoted SQL identifier.
+
+    Run databases are deliberately portable artifacts, and replay re-inserts
+    rows whose column names come from the source database's schema. Quoting
+    every interpolated identifier keeps a crafted source schema from breaking
+    out of the INSERT/UPDATE statement shape.
+    """
+    return '"' + str(identifier).replace('"', '""') + '"'
+
+
 def open_read_only_connection(
         path: str, *, check_same_thread: bool = False,
         require_closed: bool = False) -> sqlite3.Connection:
@@ -229,16 +240,19 @@ class Store:
                     for key, value in cols.items()}
         keys = list(cols.keys())
         placeholders = ",".join("?" for _ in keys)
-        sql = f"INSERT INTO {table} ({','.join(keys)}) VALUES ({placeholders})"
+        quoted_keys = ",".join(_quote_identifier(k) for k in keys)
+        sql = (f"INSERT INTO {_quote_identifier(table)} "
+               f"({quoted_keys}) VALUES ({placeholders})")
         cur = self.conn.execute(sql, tuple(cols[k] for k in keys))
         return int(cur.lastrowid)
 
     def update(self, table: str, id_val: int, **cols) -> None:
         if not cols:
             return
-        assigns = ",".join(f"{k}=?" for k in cols)
+        assigns = ",".join(f"{_quote_identifier(k)}=?" for k in cols)
         params = list(cols.values()) + [id_val]
-        self.conn.execute(f"UPDATE {table} SET {assigns} WHERE id=?", params)
+        self.conn.execute(
+            f"UPDATE {_quote_identifier(table)} SET {assigns} WHERE id=?", params)
 
     def commit(self) -> None:
         self.conn.commit()
@@ -292,8 +306,10 @@ class Store:
 
     def set_meta(self, **cols) -> None:
         cols["updated_at"] = _utcnow()
-        assigns = ",".join(f"{k}=?" for k in cols)
-        self.conn.execute(f"UPDATE run_meta SET {assigns} WHERE id=1", tuple(cols.values()))
+        assigns = ",".join(f"{_quote_identifier(k)}=?" for k in cols)
+        self.conn.execute(
+            f"UPDATE {_quote_identifier('run_meta')} SET {assigns} WHERE id=1",
+            tuple(cols.values()))
 
     @property
     def tick(self) -> int:

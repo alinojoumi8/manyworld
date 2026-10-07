@@ -40,7 +40,12 @@ from agents.external_contract import ExternalAgentError, hash_external_credentia
 from engine.storage_policy import StorageBudgetExceeded
 from hosted.auth import AuthFailure
 from hosted.catalog import CatalogConflict
-from server.request_limits import OAuthRegistrationLimitMiddleware
+from server.request_limits import (
+    LoginRateLimitMiddleware,
+    OAuthRegistrationLimitMiddleware,
+    RequestBodyLimitMiddleware,
+    same_origin,
+)
 from hosted.security import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
@@ -89,50 +94,27 @@ _EXTERNAL_ACTION_RECEIPT_PATH = re.compile(
 )
 
 
-class _RequestBodyLimitMiddleware:
+class _RequestBodyLimitMiddleware(RequestBodyLimitMiddleware):
     """Bound all HTTP bodies, including GET bodies forwarded by the agent proxy."""
 
-    def __init__(self, app: Any, *, max_bytes: int) -> None:
-        self.app = app
-        self.max_bytes = max_bytes
 
-    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") != "http":
-            await self.app(scope, receive, send)
-            return
-        chunks: list[bytes] = []
+class _ProxyResponseLimitExceeded(RuntimeError):
+    """Internal transport signal, not a handled upstream HTTP exception."""
+
+
+def _bounded_world_response(run_app: Any) -> Any:
+    """Cap ASGI response bytes before the in-process transport buffers them."""
+    async def bounded(scope: Any, receive: Any, send: Any) -> None:
         total = 0
-        while True:
-            message = await receive()
-            if message.get("type") == "http.disconnect":
-                return
-            chunk = bytes(message.get("body", b""))
-            total += len(chunk)
-            if total > self.max_bytes:
-                response = JSONResponse(
-                    status_code=413,
-                    content={"detail": {"code": "request_too_large"}},
-                    headers={
-                        "Cache-Control": "no-store",
-                        "X-Content-Type-Options": "nosniff",
-                    },
-                )
-                await response(scope, receive, send)
-                return
-            chunks.append(chunk)
-            if not message.get("more_body", False):
-                break
-        body = b"".join(chunks)
-        replayed = False
-
-        async def replay_receive() -> dict[str, Any]:
-            nonlocal replayed
-            if replayed:
-                return {"type": "http.disconnect"}
-            replayed = True
-            return {"type": "http.request", "body": body, "more_body": False}
-
-        await self.app(scope, replay_receive, send)
+        async def capped_send(message: Any) -> None:
+            nonlocal total
+            if message["type"] == "http.response.body":
+                total += len(message.get("body", b""))
+                if total > MAX_PROXY_RESPONSE_BYTES:
+                    raise _ProxyResponseLimitExceeded("upstream response exceeded byte limit")
+            await send(message)
+        await run_app(scope, receive, capped_send)
+    return bounded
 
 
 class TenantAuthService(Protocol):
@@ -612,6 +594,29 @@ def _csrf_cookie(request: Request) -> str | None:
     return request.cookies.get(CSRF_COOKIE_NAME)
 
 
+def _reject_cross_site_session_start(request: Request) -> None:
+    """Login-CSRF guard for the one pre-auth mutation that mints a session.
+
+    A cross-site form POST carries no custom headers, so the CSRF double-submit
+    cannot apply before a session exists. Browsers attach Sec-Fetch-Site (and,
+    for POSTs, usually Origin) to every navigation; a request with neither is a
+    non-browser client. Same-origin and browser-initiated ("none") requests
+    pass; anything a browser could only have sent cross-site is rejected before
+    any catalog write.
+    """
+    sec_fetch_site = str(
+        request.headers.get("sec-fetch-site", "") or "").strip().lower()
+    if sec_fetch_site:
+        if sec_fetch_site not in {"same-origin", "none"}:
+            raise _generic_error(403, "cross_site_request")
+        return
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+    if not same_origin(origin, request.url):
+        raise _generic_error(403, "cross_site_request")
+
+
 def _generic_error(status: int, code: str, *, headers: Mapping[str, str] | None = None) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code}, headers=dict(headers or {}))
 
@@ -696,6 +701,7 @@ def create_hosted_app(
     app.state.readiness_tasks = {}
     app.add_middleware(_RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
     app.add_middleware(OAuthRegistrationLimitMiddleware)
+    app.add_middleware(LoginRateLimitMiddleware)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, _exc: RequestValidationError) -> JSONResponse:
@@ -1014,6 +1020,7 @@ def create_hosted_app(
 
     @app.post("/auth/login")
     async def login(body: LoginBody, request: Request) -> Response:
+        _reject_cross_site_session_start(request)
         client_host = request.client.host if request.client else "unknown"
         try:
             credentials = await _invoke(
@@ -1559,6 +1566,10 @@ def create_hosted_app(
         if upstream_path is None:
             raise _generic_error(404, "not_found")
         query_items = list(request.query_params.multi_items())
+        # Hosted agent reads always select the bounded page contract, including
+        # callers using the historical URL without query parameters.
+        if upstream_path == "/api/agents" and "limit" not in request.query_params:
+            query_items.append(("limit", "100"))
         if (
             len(request.url.query.encode("utf-8")) > MAX_PROXY_QUERY_BYTES
             or len(query_items) > MAX_PROXY_QUERY_FIELDS
@@ -1575,7 +1586,7 @@ def create_hosted_app(
             except asyncio.TimeoutError:
                 raise _generic_error(429, "world_read_capacity") from None
             try:
-                transport = httpx.ASGITransport(app=run_app)
+                transport = httpx.ASGITransport(app=_bounded_world_response(run_app))
                 async with httpx.AsyncClient(
                     transport=transport,
                     base_url="http://run.internal",
@@ -1583,18 +1594,17 @@ def create_hosted_app(
                 ) as client:
                     upstream = await client.request(
                         "GET" if request.method == "HEAD" else request.method,
-                        upstream_path,
-                        params=query_items,
+                        upstream_path, params=query_items,
                         headers={"accept": "application/json"},
                     )
             finally:
                 slots.release()
-            if len(upstream.content) > MAX_PROXY_RESPONSE_BYTES:
-                raise _generic_error(502, "upstream_response_too_large")
             try:
                 data = upstream.json()
             except (ValueError, json.JSONDecodeError):
                 raise _generic_error(502, "invalid_upstream_response") from None
+        except _ProxyResponseLimitExceeded:
+            raise _generic_error(502, "upstream_response_too_large") from None
         except HTTPException:
             raise
         except Exception:
@@ -1960,6 +1970,16 @@ def create_hosted_app(
 
     @app.websocket("/api/v2/tenants/{tenant_id}/runs/{run_id}/ws")
     async def hosted_websocket(websocket: WebSocket, tenant_id: UUID, run_id: UUID) -> None:
+        # Same-site browser contexts (e.g. a compromised sibling subdomain)
+        # would otherwise complete the cookie-authenticated handshake because
+        # SameSite=Lax does not govern WebSocket handshakes. Browsers always
+        # attach Origin; same-origin is the only acceptable value, and a
+        # missing Origin is a non-browser client. Reject before any lookup so
+        # the close code cannot become a tenant oracle.
+        origin = websocket.headers.get("origin")
+        if origin is not None and not same_origin(origin, websocket.url):
+            await websocket.close(code=1008)
+            return
         # Every potentially revealing lookup occurs before accept.
         try:
             await authorize(websocket, tenant_id)

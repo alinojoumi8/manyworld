@@ -51,6 +51,18 @@ limit, including GET requests that pass through the agent proxy.
 Rate-limit denials add at most one audit row per connection/minute; rejected
 traffic does not create an unbounded audit trail in a paused run.
 
+Local HTTP bodies are capped at 1 MiB, including chunked requests. The hosted
+proxy caps response bodies before its ASGI transport buffers them and supplies
+a default 100-agent page for agent reads without a limit. Local browser
+WebSockets require a matching scheme, hostname and port, or an explicit
+`server.allowed_origins` entry. Hosted browser WebSockets require the same origin;
+non-browser clients without an Origin header retain their authentication flow.
+Hosted login rejects cross-site browser session creation and permits at most
+60 attempts per observed peer and 600 globally per hour, per process. The durable
+auth trail defaults to seven-day retention and 10,000 retained rows per tenant;
+overflow pruning preserves the active throttle window even if it exceeds that
+soft cap. Tenant RLS applies to deletion; security audit records remain append-only.
+
 Anonymous OAuth client registration permits 20 requests per observed peer and
 300 total per hour, per server process. Forwarded headers supplied directly by
 clients do not change the limiter's peer. A proxy or shared NAT can group clients;
