@@ -132,7 +132,21 @@ npm run licenses:check
 npm run dev
 ```
 
-Vite proxies `/api`, `/ws`, and `/reports`. The production build writes directly
+Vite proxies `/api`, `/ws`, and `/reports`. For a browser served by Vite,
+explicitly allow its origin in the backend run profile because its port differs
+from the local API server:
+
+```yaml
+server:
+  allowed_origins:
+    - http://localhost:5173
+```
+
+Use the exact scheme, hostname and port printed by Vite; add a separate entry
+if opening it through `127.0.0.1`. The production bundle served by FastAPI uses
+its own origin automatically.
+
+The production build writes directly
 to `server/static/`:
 
 ```powershell
