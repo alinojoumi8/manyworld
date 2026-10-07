@@ -13,6 +13,7 @@ export function CityAtlasViewport({ camera, onCameraChange, disabled, children }
     if (!element) return;
     const arrange = () => {
       const bounds = element.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
       const atlas = element.parentElement;
       const overlays = [...atlas.querySelectorAll('.civic-city__legend, .civic-city__mobile-peek, .civic-city__coordinates')]
         .map(node=>node.getBoundingClientRect()).filter(rect=>rect.width&&rect.height&&rect.top>bounds.top);
