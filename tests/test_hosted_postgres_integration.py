@@ -257,3 +257,39 @@ def test_runtime_role_can_update_only_the_external_agent_quota(two_tenants) -> N
         catalog.set_external_agent_policy(
             tenant_a.id, actor_user_id=admin_b.id, max_external_agents_per_run=3,
         )
+
+
+def test_auth_trail_pruning_preserves_lockout_and_tenant_isolation(two_tenants):
+    import psycopg
+    (tenant_a, _, _), (tenant_b, _, _) = two_tenants
+    now = datetime.now(timezone.utc)
+    account, peer = 'a' * 64, 'b' * 64
+    catalog = HostedCatalog(RUNTIME_DSN, max_auth_attempts_per_tenant=100)
+    with catalog.tenant_transaction(tenant_a.id) as connection:
+        for index in range(110):
+            connection.execute(
+                "INSERT INTO auth_attempts (tenant_id,email_hash,outcome,created_at) "
+                "VALUES (%s,%s,'bad_credentials',%s)",
+                (str(tenant_a.id), 'c' * 64, now - timedelta(days=2)),
+            )
+        for index in range(5):
+            connection.execute(
+                "INSERT INTO auth_attempts (tenant_id,email_hash,outcome,remote_address_hash,created_at) "
+                "VALUES (%s,%s,'bad_credentials',%s,%s)",
+                (str(tenant_a.id), account, peer, now - timedelta(minutes=1)),
+            )
+    other_id = catalog.record_auth_attempt(
+        tenant_b.id, email_hash=account, outcome='bad_credentials')
+    reservation = catalog.reserve_login_attempt(
+        tenant_a.id, account, peer, since=now - timedelta(hours=1),
+        occurred_at=now, max_failures=5)
+    assert not reservation.reserved
+    assert len(reservation.account_failures) == 5
+    with catalog.tenant_transaction(tenant_a.id) as connection:
+        assert connection.execute('SELECT count(*) AS count FROM auth_attempts').fetchone()['count'] == 100
+        assert connection.execute('DELETE FROM auth_attempts WHERE id=%s', (other_id,)).rowcount == 0
+    with catalog.tenant_transaction(tenant_b.id) as connection:
+        assert connection.execute('SELECT id FROM auth_attempts WHERE id=%s', (other_id,)).fetchone()
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with catalog.tenant_transaction(tenant_a.id) as connection:
+            connection.execute('DELETE FROM audit_log')

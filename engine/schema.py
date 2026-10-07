@@ -6,6 +6,9 @@ as integer cents everywhere; Ledger.post rejects unbalanced batches before
 insertion and tick reconciliation independently verifies every account (PRD R1).
 """
 
+from contextlib import closing
+import sqlite3
+
 from .migrations import apply_migrations
 
 SCHEMA_VERSION = 28
@@ -48,6 +51,45 @@ def assert_schema_compatible(conn) -> None:
         raise SchemaCompatibilityError(
             f"run database schema v{stored_version} is newer than this binary's "
             f"supported schema v{SCHEMA_VERSION}")
+
+
+def assert_source_table_schema(conn, tables, *, required_tables=None) -> None:
+    """Reject a source database whose row-copied tables diverge from this schema.
+
+    Replay and fork re-insert rows whose column names come from a source
+    database's own schema. Comparing each copied table's structure against a
+    disposable in-memory reference (no DDL runs on the source) keeps a crafted
+    or migrated-differently source from smuggling SQL-shaped column names into
+    the destination store. Tables absent from the source are rejected only when
+    listed in ``required_tables``; absent optional tables belong to older
+    schema versions whose semantics never read them. Missing additive columns
+    are accepted only when the destination can supply a nullable/default value;
+    existing column types and primary keys must still match.
+    """
+    required = set(tables) if required_tables is None else set(required_tables)
+    with closing(sqlite3.connect(":memory:")) as reference:
+        initialize_schema(reference)
+        for table in tables:
+            quoted = '"' + str(table).replace('"', '""') + '"'
+            reference_rows = reference.execute(f"PRAGMA table_info({quoted})").fetchall()
+            expected = {row[1]: (row[2], row[3], row[5]) for row in reference_rows}
+            optional_columns = {row[1] for row in reference_rows
+                                if not row[5] and (not row[3] or row[4] is not None)}
+            if not expected:
+                continue  # table no longer exists in this binary's schema
+            actual_rows = conn.execute(f"PRAGMA table_info({quoted})").fetchall()
+            if not actual_rows:
+                if table in required:
+                    raise SchemaCompatibilityError(
+                        f"source database is missing required table {table!r}")
+                continue
+            actual = {
+                row[1]: (row[2], row[3], row[5]) for row in actual_rows
+            }
+            if (any(expected.get(k) != v for k, v in actual.items())
+                    or (set(expected) - set(actual) - optional_columns)):
+                raise SchemaCompatibilityError(
+                    f"source database table {table!r} has an incompatible schema")
 
 
 SCHEMA_SQL = r"""

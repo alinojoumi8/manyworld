@@ -740,6 +740,60 @@ def test_login_sets_exact_hardened_cookies_without_returning_credentials(client:
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_login_rejects_cross_site_browser_requests(client: TestClient):
+    # A browser only sends Sec-Fetch-Site: cross-site for a cross-site POST;
+    # such a request must be refused before any catalog write or session mint.
+    response = client.post(
+        "/auth/login",
+        json={"tenant_id": str(TENANT_A), "email": "admin@example.test",
+              "password": "admin-password"},
+        headers={"sec-fetch-site": "cross-site"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "cross_site_request"
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "https://testserver:8443", "http://testserver", "null"])
+def test_login_rejects_mismatched_origin_without_fetch_metadata(client: TestClient, origin):
+    # Older browsers omit Sec-Fetch-Site but still attach Origin to POSTs;
+    # an Origin that does not match the request host is cross-site.
+    response = client.post(
+        "/auth/login",
+        json={"tenant_id": str(TENANT_A), "email": "admin@example.test",
+              "password": "admin-password"},
+        headers={"origin": origin},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "cross_site_request"
+
+
+def test_login_allows_same_origin_and_browser_initiated_and_api_clients(client: TestClient):
+    same_origin = client.post(
+        "/auth/login",
+        json={"tenant_id": str(TENANT_A), "email": "admin@example.test",
+              "password": "admin-password"},
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    assert same_origin.status_code == 200
+    browser_initiated = client.post(
+        "/auth/login",
+        json={"tenant_id": str(TENANT_A), "email": "observer@example.test",
+              "password": "observer-password"},
+        headers={"sec-fetch-site": "none"},
+    )
+    assert browser_initiated.status_code == 200
+    # Non-browser clients send neither header (the pre-existing test path).
+    api_client = login(client)
+    assert api_client.status_code == 200
+    matching_origin = client.post(
+        "/auth/login",
+        json={"tenant_id": str(TENANT_A), "email": "admin@example.test",
+              "password": "admin-password"},
+        headers={"origin": "https://testserver"},
+    )
+    assert matching_origin.status_code == 200
+
+
 def test_hosted_oauth_dcr_consent_and_redirect_flow(
     client: TestClient,
     services: tuple[FakeCatalog, FakeAuth, FakeSupervisor, dict[str, datetime]],
@@ -1250,3 +1304,42 @@ def test_websocket_denies_before_accept_and_authorized_stream_is_sanitized(
             pass
     assert denied.value.code == 4403
     assert len(supervisor.get_handle_calls) == before
+
+
+@pytest.mark.parametrize("origin", ["https://evil.example", "http://testserver:8080", "https://testserver", "null"])
+def test_websocket_rejects_cross_origin_handshake_before_authorization(
+    client: TestClient,
+    services: tuple[FakeCatalog, FakeAuth, FakeSupervisor, dict[str, datetime]],
+    origin,
+):
+    _, _, supervisor, _ = services
+    login(client)
+    endpoint = f"/api/v2/tenants/{TENANT_A}/runs/{RUN_A}/ws"
+    cookie = {
+        "cookie": (
+            f"{SESSION_COOKIE_NAME}={ADMIN_SESSION}; "
+            f"{CSRF_COOKIE_NAME}={ADMIN_CSRF}"
+        )
+    }
+    # SameSite=Lax does not govern WebSocket handshakes; a sibling-subdomain
+    # script context must not complete the cookie-authenticated handshake.
+    before = len(supervisor.get_handle_calls)
+    with pytest.raises(WebSocketDisconnect) as cross_origin:
+        with client.websocket_connect(
+                endpoint,
+                headers={**cookie, "origin": origin}):
+            pass
+    assert cross_origin.value.code == 1008
+    assert len(supervisor.get_handle_calls) == before
+    # Same-origin handshakes keep working.
+    with client.websocket_connect(
+            "wss://testserver" + endpoint, headers={**cookie, "origin": "https://testserver"}) as ws:
+        assert ws.receive_json()["type"] == "run_status"
+
+
+def test_proxy_real_fastapi_overflow_keeps_actionable_limit_error(client, monkeypatch):
+    login(client, observer=True)
+    monkeypatch.setattr("hosted.app.MAX_PROXY_RESPONSE_BYTES", 8)
+    response = client.get(f"/api/v2/tenants/{TENANT_A}/runs/{RUN_A}/world/agents")
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "upstream_response_too_large"
