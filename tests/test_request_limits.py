@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.responses import StreamingResponse
 
-from hosted.app import _bounded_world_response
+from hosted.app import _bounded_world_response, _ProxyResponseLimitExceeded
 from server.request_limits import RequestBodyLimitMiddleware, same_origin
 
 
@@ -43,7 +43,6 @@ def test_body_limit_preserves_delayed_streaming_response():
 
 
 def test_proxy_response_limit_stops_upstream_before_transport_buffers(monkeypatch):
-    from fastapi import HTTPException
     monkeypatch.setattr('hosted.app.MAX_PROXY_RESPONSE_BYTES', 8)
     sent = []
     produced = []
@@ -60,8 +59,7 @@ def test_proxy_response_limit_stops_upstream_before_transport_buffers(monkeypatc
     async def send(message):
         sent.append(message)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(_ProxyResponseLimitExceeded):
         asyncio.run(_bounded_world_response(upstream)({'type': 'http'}, receive, send))
-    assert exc.value.status_code == 502
     assert produced == [0, 1, 2]
     assert sum(len(m.get('body', b'')) for m in sent) == 8

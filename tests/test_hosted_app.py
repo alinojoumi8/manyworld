@@ -1335,3 +1335,11 @@ def test_websocket_rejects_cross_origin_handshake_before_authorization(
     with client.websocket_connect(
             "wss://testserver" + endpoint, headers={**cookie, "origin": "https://testserver"}) as ws:
         assert ws.receive_json()["type"] == "run_status"
+
+
+def test_proxy_real_fastapi_overflow_keeps_actionable_limit_error(client, monkeypatch):
+    login(client, observer=True)
+    monkeypatch.setattr("hosted.app.MAX_PROXY_RESPONSE_BYTES", 8)
+    response = client.get(f"/api/v2/tenants/{TENANT_A}/runs/{RUN_A}/world/agents")
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "upstream_response_too_large"
