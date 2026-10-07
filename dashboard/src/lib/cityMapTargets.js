@@ -1,15 +1,16 @@
 // Display-only packing. Canonical map coordinates and evidence stay untouched.
 export function packCityTargets(targets, width, height) {
   const placed = [];
-  const offsets = new Array(targets.length);
+  const offsets = targets.map(()=>({dx:0,dy:0}));
   let crowded = false;
   const ordered = targets.map((target,index)=>({target,index})).sort((a,b)=>b.target.width-a.target.width||a.index-b.index);
   ordered.forEach(({target,index}) => {
+    if (crowded) return;
     const w = Math.max(28, target.width), h = Math.max(28, target.height);
     const fits = (x, y) => placed.every(p =>
       Math.abs(p.x - x) >= (p.width + w) / 2 + 4 || Math.abs(p.y - y) >= (p.height + h) / 2 + 4);
     let best = null;
-    for (let radius = 0; radius <= Math.hypot(width, height) && !best; radius += 12) {
+    for (let radius = 0; radius <= Math.min(96, Math.hypot(width, height)) && !best; radius += 12) {
       const steps = radius ? Math.ceil(2 * Math.PI * radius / 12) : 1;
       for (let i = 0; i < steps; i++) {
         const angle = i * 2 * Math.PI / steps;

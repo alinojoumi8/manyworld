@@ -48,6 +48,7 @@ async function mockCommonApis(page: Page, options: {
 } = {}) {
   await page.route("**/api/participant",route=>route.fulfill({json:{enabled:false,active:false}}));
   const status = options.status ?? "running";
+  await page.route('**/api/run/status',route=>route.fulfill({json:{run_id:'run-demo',tick:6,status,running:status==='running'||status==='active'}}));
   const cityAgents = options.agents ?? agents;
   const mapAgents = options.mapAgents ?? cityAgents.map(agent => ({
     ...agent, x: null, y: null,
