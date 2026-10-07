@@ -783,6 +783,7 @@ def test_login_throttle_reservation_locks_account_and_client_atomically():
     client_hash = "2" * 64
     connection = CatalogConnection([
         Cursor(one={"id": tenant_id}),
+        Cursor(),  # trail prune
         Cursor(),
         Cursor(),
         Cursor(rows=[]),
@@ -809,6 +810,60 @@ def test_login_throttle_reservation_locks_account_and_client_atomically():
     reservation_sql, reservation_params = connection.calls[-1]
     assert "INSERT INTO auth_attempts" in reservation_sql
     assert reservation_params[1:3] == (account_hash, client_hash)
+
+
+def test_login_throttle_reservation_prunes_aged_and_overflow_attempts():
+    tenant_id = uuid4()
+    current = datetime.now(timezone.utc)
+    account_hash = "1" * 64
+    client_hash = "2" * 64
+    connection = CatalogConnection([
+        Cursor(one={"id": tenant_id}),
+        Cursor(),  # trail prune
+        Cursor(),
+        Cursor(),
+        Cursor(rows=[]),
+        Cursor(one={"id": 99}),
+    ])
+    catalog = HostedCatalog(
+        "postgresql://example", connect=Connections(connection),
+        auth_attempt_retention=timedelta(days=7),
+        max_auth_attempts_per_tenant=5_000,
+    )
+
+    catalog.reserve_login_attempt(
+        tenant_id, account_hash, client_hash,
+        since=current - timedelta(hours=1),
+        occurred_at=current,
+        max_failures=5,
+    )
+
+    prune_sql, prune_params = connection.calls[2]
+    assert prune_sql.startswith("DELETE FROM auth_attempts")
+    assert "created_at < %s" in prune_sql
+    assert "OFFSET %s" in prune_sql
+    assert prune_params[0] == str(tenant_id)
+    assert prune_params[1] == current - timedelta(days=7)
+    assert prune_params[2] == current - timedelta(hours=1)
+    assert prune_params[4] == 5_000
+    # The prune never removes in-window failures: its horizon must be older
+    # than any supported throttle window.
+    assert prune_params[1] < current - timedelta(hours=24)
+
+
+def test_login_throttle_prune_retention_must_exceed_throttle_window():
+    from hosted.catalog import CatalogError
+
+    with pytest.raises(ValueError, match="at least 24 hours"):
+        HostedCatalog(
+            "postgresql://example", connect=Connections(CatalogConnection()),
+            auth_attempt_retention=timedelta(hours=12),
+        )
+    with pytest.raises(ValueError, match="max_auth_attempts_per_tenant"):
+        HostedCatalog(
+            "postgresql://example", connect=Connections(CatalogConnection()),
+            max_auth_attempts_per_tenant=10,
+        )
 
 
 def test_run_status_requires_optional_live_lease_and_terminal_state_clears_it():

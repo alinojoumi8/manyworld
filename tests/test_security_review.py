@@ -157,6 +157,53 @@ def test_registration_limiter_bounds_distinct_peers_and_expires():
     assert len(limiter._clients) == len(limiter._requests) == 1
 
 
+def test_login_limiter_bounds_peers_without_writing_rows():
+    from server.request_limits import LoginRateLimitMiddleware
+    now = [0.0]
+    accepted = []
+
+    async def next_app(scope, receive, send):
+        accepted.append(scope["client"][0])
+
+    limiter = LoginRateLimitMiddleware(next_app, global_limit=4,
+                                       client_limit=2, window_seconds=60,
+                                       clock=lambda: now[0])
+
+    async def request(peer, path="/auth/login"):
+        messages = []
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+
+        async def send(message):
+            messages.append(message)
+
+        await limiter({"type": "http", "method": "POST", "path": path,
+                       "client": (peer, 1234)}, receive, send)
+        return messages
+
+    # Two peers within the per-peer limit pass through untouched.
+    assert asyncio.run(request("peer-a")) == []
+    assert asyncio.run(request("peer-a")) == []
+    assert asyncio.run(request("peer-b")) == []
+    # The third attempt from peer-a hits the per-peer ceiling; peer-d hits the
+    # global ceiling once peer-c consumed the final global slot.
+    assert asyncio.run(request("peer-a"))[0]["status"] == 429
+    assert asyncio.run(request("peer-c")) == []
+    rejected = asyncio.run(request("peer-d"))
+    assert rejected[0]["status"] == 429
+    assert any(
+        (key.decode() if isinstance(key, bytes) else str(key)).lower()
+        == "retry-after"
+        for key, _ in rejected[0]["headers"]
+    )
+    assert len(accepted) == 4
+    # Other surfaces are never gated, and window expiry restores capacity.
+    assert asyncio.run(request("peer-a", path="/auth/logout")) == []
+    now[0] = 61
+    assert asyncio.run(request("peer-e")) == []
+
+
 def test_persistent_registration_cap_preserves_existing_clients(review_world, monkeypatch):
     service = review_world.runtime.external
     monkeypatch.setattr("agents.external.MAX_OAUTH_CLIENTS", 1)
