@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+from engine.schema import assert_source_table_schema
 from engine.semantics import (
     UnsupportedEngineSemantics,
     semantics_version,
@@ -49,6 +50,14 @@ REPLAY_INPUT_TABLES = (
     "dataset_manifests",
     "calibration_targets",
     "scenario_packs",
+)
+# Source tables whose recorded rows are re-inserted during replay. The external
+# tables are optional: sources from older schema versions never carry them, and
+# those semantics never read them.
+REPLAY_EXTERNAL_SOURCE_TABLES = (
+    "external_agent_connections",
+    "external_agent_turns",
+    "external_action_submissions",
 )
 
 LIVE_ENTREPRENEURSHIP_DEFAULTS = {
@@ -714,6 +723,11 @@ def open_run(config: dict, resume: str | None, replay: str | None, *,
             sys.exit(f"run database not found: {source_db}")
         source_store = Store(str(source_db), create=False, read_only=True)
         try:
+            # A replay re-inserts source rows; validate every row-copied table's
+            # structure against this binary's schema before any row is read.
+            assert_source_table_schema(
+                source_store.conn, REPLAY_INPUT_TABLES + REPLAY_EXTERNAL_SOURCE_TABLES,
+                required_tables=REPLAY_INPUT_TABLES)
             source_meta = source_store.get_meta()
             replay_cfg = json.loads(source_meta["config_json"])
             replay_cfg["engine_semantics_version"] = semantics_version(

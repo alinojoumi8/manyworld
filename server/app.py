@@ -15,6 +15,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,6 +25,7 @@ from pydantic import BaseModel, Field
 from engine.store import load_json
 from agents.participant import ParticipantError
 from server.controller import RunController
+from server.request_limits import same_origin, RequestBodyLimitMiddleware
 from world.loop import World
 from world.shocks import SHOCK_KINDS, TRIGGER_TYPES
 from observability import get_logger, log_event as operational_log
@@ -32,6 +34,10 @@ from server.projections.population import population_at, resident_regions_at
 
 
 logger = get_logger("server")
+
+# Local research payloads (study launch drafts, oracle questions) stay far
+# below this; the bound exists so no handler can buffer an unbounded body.
+MAX_LOCAL_REQUEST_BODY_BYTES = 1_048_576
 
 
 class AskBody(BaseModel):
@@ -87,6 +93,10 @@ _FILESYSTEM_PATH_VALUE = re.compile(
 def _hosted_path_key(key: object) -> bool:
     name = str(key)
     return name in _HOSTED_PATH_KEYS or name.endswith(_HOSTED_PATH_KEY_SUFFIXES)
+
+
+def _same_origin(ws: WebSocket, origin: str) -> bool:
+    return same_origin(origin, ws.url)
 
 
 def _hosted_safe_document(value):
@@ -239,6 +249,12 @@ def create_app(world: World, *, served_ticks: int | None = None,
     hub = controller.hub
     store = world.store
     app = FastAPI(title="Manyworld Observatory", lifespan=controller.lifespan)
+    # Local mode is single-operator, but its handlers parse request bodies
+    # directly; cap the real stream (chunked encoding has no Content-Length)
+    # with a generous research-payload bound. Hosted mode installs its own,
+    # stricter 64 KiB limit on top of this one.
+    app.add_middleware(
+        RequestBodyLimitMiddleware, max_bytes=MAX_LOCAL_REQUEST_BODY_BYTES)
     if hosted_safe:
         @app.middleware("http")
         async def storage_admission(request: Request, call_next):
@@ -1173,7 +1189,10 @@ def create_app(world: World, *, served_ticks: int | None = None,
     async def websocket_endpoint(ws: WebSocket):
         origin = ws.headers.get("origin")
         allowed_origins = set(world.config.get("server", {}).get("allowed_origins", []))
-        if origin and allowed_origins and origin not in allowed_origins:
+        # Deny-by-default: a browser from any other origin may not subscribe
+        # to the simulation stream. Same-origin is always acceptable, and a
+        # request without an Origin header is not a browser.
+        if origin is not None and origin not in allowed_origins and not _same_origin(ws, origin):
             operational_log(
                 logger, logging.WARNING, "websocket.origin_denied",
                 run_id=world.gateway.run_id)

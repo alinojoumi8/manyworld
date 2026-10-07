@@ -3641,6 +3641,87 @@ def test_websocket_and_http_paths_emit_operational_logs(tmp_path, caplog):
                 if record.event_fields["path"] == "/api/run/step").levelno == logging.INFO
 
 
+def test_websocket_denies_cross_origin_browser_and_allows_same_origin(tmp_path):
+    from starlette.websockets import WebSocketDisconnect
+
+    world = _world(tmp_path, "ws-origin.db")
+    app = create_app(world)
+    with TestClient(app) as client:
+        # A website the operator visits may reach 127.0.0.1 from the browser;
+        # it must not subscribe to the simulation stream.
+        with pytest.raises(WebSocketDisconnect) as denied:
+            with client.websocket_connect(
+                    "/ws", headers={"origin": "https://evil.example"}):
+                pass
+        assert denied.value.code == 1008
+        # Same-origin browser connections and non-browser clients still work.
+        with client.websocket_connect(
+                "/ws", headers={"origin": "http://testserver"}) as ws:
+            assert ws.receive_json()["tick"] == 0
+        with client.websocket_connect("/ws") as ws:
+            assert ws.receive_json()["tick"] == 0
+
+    world.config.setdefault("server", {})["allowed_origins"] = [
+        "http://testserver", "https://dashboard.example"]
+    with TestClient(app) as client:
+        with client.websocket_connect(
+                "/ws", headers={"origin": "https://dashboard.example"}) as ws:
+            assert ws.receive_json()["tick"] == 0
+        with pytest.raises(WebSocketDisconnect) as unlisted:
+            with client.websocket_connect(
+                    "/ws", headers={"origin": "https://other.example"}):
+                pass
+        assert unlisted.value.code == 1008
+
+
+def test_local_request_bodies_are_bounded_including_chunked_encoding(tmp_path):
+    from server.request_limits import RequestBodyLimitMiddleware
+
+    world = _world(tmp_path, "ws-body-limit.db")
+    app = create_app(world)
+    with TestClient(app) as client:
+        oversized = client.post(
+            "/api/oracle/ask", json={"question": "x" * 1_100_000})
+        assert oversized.status_code == 413
+        assert oversized.json()["detail"]["code"] == "request_too_large"
+        normal = client.post("/api/oracle/ask", json={"question": "hello"})
+        assert normal.status_code in {200, 400, 503}
+
+    # A chunked request has no Content-Length, so the per-route guards read 0;
+    # the middleware must still enforce the cap on the real byte stream.
+    async def run_chunked():
+        app_calls = []
+        messages = []
+        calls = {"n": 0}
+
+        async def receive():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"type": "http.request", "body": b"x" * 600_000,
+                        "more_body": True}
+            return {"type": "http.request", "body": b"x" * 600_000,
+                    "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        async def next_app(scope, inner_receive, inner_send):
+            app_calls.append(scope["path"])
+
+        middleware = RequestBodyLimitMiddleware(next_app, max_bytes=1_048_576)
+        await middleware(
+            {"type": "http", "method": "POST", "path": "/api/oracle/ask",
+             "headers": [], "client": ("127.0.0.1", 1), "query_string": b""},
+            receive, send)
+        return app_calls, messages
+
+    import asyncio as _asyncio
+    app_calls, messages = _asyncio.run(run_chunked())
+    assert app_calls == []  # the handler never sees the oversized chunked body
+    assert messages[0]["type"] == "http.response.start"
+    assert messages[0]["status"] == 413
+
+
 def test_react_dashboard_bundle_is_local_and_current():
     package = json.loads(Path("dashboard/package.json").read_text(encoding="utf-8"))
     assert {"react", "react-dom", "recharts"} <= package["dependencies"].keys()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import re
@@ -409,6 +409,8 @@ class HostedCatalog:
         capability: str = "web",
         forbidden_role: str | None = None,
         connect_timeout_seconds: int = 10,
+        auth_attempt_retention: timedelta = timedelta(days=7),
+        max_auth_attempts_per_tenant: int = 10_000,
     ):
         if not dsn.strip():
             raise ValueError("catalog DSN must not be empty")
@@ -441,6 +443,22 @@ class HostedCatalog:
         self.expected_role = expected_role
         self.capability = capability
         self.forbidden_role = forbidden_role
+        if not isinstance(auth_attempt_retention, timedelta) or (
+                auth_attempt_retention < timedelta(hours=24)):
+            # Retention must always exceed the widest login-throttle window so
+            # pruning can never resurrect a counted failure by dropping the
+            # success row that cleared it.
+            raise ValueError(
+                "auth_attempt_retention must be a timedelta of at least 24 hours")
+        if (
+            isinstance(max_auth_attempts_per_tenant, bool)
+            or not isinstance(max_auth_attempts_per_tenant, int)
+            or not (100 <= max_auth_attempts_per_tenant <= 1_000_000)
+        ):
+            raise ValueError(
+                "max_auth_attempts_per_tenant must be an integer from 100 to 1000000")
+        self.auth_attempt_retention = auth_attempt_retention
+        self.max_auth_attempts_per_tenant = max_auth_attempts_per_tenant
 
     @staticmethod
     def _default_connect(dsn: str, *, connect_timeout_seconds: int = 10) -> Any:
@@ -1885,6 +1903,31 @@ class HostedCatalog:
             if active is None:
                 return LoginThrottleReservation(False)
 
+            # Bound the durable auth trail before counting: drop rows older
+            # than the retention horizon and any overflow past the per-tenant
+            # cap, without deleting rows in the active throttle window.
+            # The retention horizon always exceeds the widest throttle
+            # window, so this can never remove a counted in-window failure or
+            # resurrect one by dropping its clearing success row (successes
+            # are strictly newer than the failures they clear).
+            connection.execute(
+                "DELETE FROM auth_attempts "
+                "WHERE tenant_id = %s AND ("
+                "created_at < %s OR (created_at < %s AND id IN ("
+                "  SELECT id FROM auth_attempts"
+                "  WHERE tenant_id = %s"
+                "  ORDER BY created_at DESC, id DESC"
+                "  OFFSET %s"
+                ")))",
+                (
+                    str(tenant),
+                    occurred_at - self.auth_attempt_retention,
+                    since,
+                    str(tenant),
+                    self.max_auth_attempts_per_tenant,
+                ),
+            )
+
             for lock_key in sorted({
                 _advisory_lock_key(account),
                 _advisory_lock_key(client_account),
@@ -2051,7 +2094,8 @@ class HostedCatalog:
                     " 'hosted_transfer_run_owner(uuid,uuid,uuid)', 'EXECUTE') "
                     "AS can_transfer_run_owners, "
                     "EXISTS (SELECT 1 FROM unnest(%s::text[]) AS table_name "
-                    " WHERE has_table_privilege(current_user, table_name, 'DELETE') "
+                    " WHERE (has_table_privilege(current_user, table_name, 'DELETE') "
+                    " AND (table_name <> 'auth_attempts' OR %s::text <> 'web')) "
                     " OR has_table_privilege(current_user, table_name, 'TRUNCATE') "
                     " OR has_table_privilege(current_user, table_name, 'REFERENCES') "
                     " OR has_table_privilege(current_user, table_name, 'TRIGGER')) "
@@ -2071,6 +2115,7 @@ class HostedCatalog:
                     " has_table_privilege(current_user, 'invitations', 'UPDATE') AND "
                     " has_table_privilege(current_user, 'auth_attempts', 'SELECT') AND "
                     " has_table_privilege(current_user, 'auth_attempts', 'INSERT') AND "
+                    " has_table_privilege(current_user, 'auth_attempts', 'DELETE') AND "
                     " has_table_privilege(current_user, 'audit_log', 'INSERT')) "
                     " AS has_web_privileges, "
                     "(has_table_privilege(current_user, 'runs', 'SELECT') AND "
@@ -2093,6 +2138,7 @@ class HostedCatalog:
                             "tenants", "users", "memberships", "sessions", "invitations",
                             "runs", "external_agents", "audit_log", "auth_attempts",
                         ],
+                        self.capability,
                         self.forbidden_role,
                         self.forbidden_role,
                     ),

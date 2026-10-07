@@ -282,7 +282,13 @@ def _grant_runtime_access(
         "GRANT UPDATE (max_external_agents_per_run, updated_at) ON TABLE tenants "
         f"TO {quoted_role}",
     )
-    _execute(connection, f"GRANT SELECT, INSERT ON TABLE auth_attempts TO {quoted_role}")
+    # Login-throttle retention bounds the durable auth trail per tenant. DELETE
+    # stays tenant-scoped by forced RLS and only removes aged/overflow rows.
+    _execute(
+        connection,
+        "GRANT SELECT, INSERT, DELETE ON TABLE auth_attempts "
+        f"TO {quoted_role}",
+    )
     _execute(connection, f"GRANT INSERT ON TABLE audit_log TO {quoted_role}")
     _execute(connection, f"GRANT INSERT ON TABLE external_security_audit_events TO {quoted_role}")
     # The audit append reads the tenant-scoped chain head and uses INSERT ...
