@@ -143,7 +143,7 @@ def same_origin(origin: str, url: Any) -> bool:
                 and parsed.hostname is not None
                 and not parsed.username and not parsed.password
                 and not parsed.path and not parsed.query and not parsed.fragment
-                and (parsed.scheme, parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
-                == (scheme, target.hostname, target.port or (443 if scheme == "https" else 80)))
+                and (parsed.scheme, parsed.hostname, parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80))
+                == (scheme, target.hostname, target.port if target.port is not None else (443 if scheme == "https" else 80)))
     except ValueError:
         return False

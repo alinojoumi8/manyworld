@@ -16,6 +16,7 @@ from server.request_limits import RequestBodyLimitMiddleware, same_origin
     ('https://localhost:8000', 'ws://localhost:8000/ws', False),
     ('https://example.test:443', 'wss://example.test/ws', True),
     ('http://[::1]:8000', 'ws://[::1]:8000/ws', True),
+    ('http://localhost:0', 'ws://localhost/ws', False),
     ('null', 'ws://localhost/ws', False),
     ('http://localhost:bad', 'ws://localhost/ws', False),
     ('http://localhost/path', 'ws://localhost/ws', False),
