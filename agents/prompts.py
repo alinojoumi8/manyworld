@@ -2430,7 +2430,23 @@ class ContextBuilder:
                 )[:6000])
         beliefs = context.get("beliefs", {})
         if beliefs:
-            lines.append("[BELIEFS] " + ", ".join(f"{k}={v}" for k, v in list(beliefs.items())[:8]))
+            belief_items = list(beliefs.items())
+            if (grounding_active and config.get("beliefs", {}).get(
+                    "prioritize_reserved_belief_context", False) is True):
+                # Retain the existing order for stored configs without this
+                # opt-in. Baselines used by the reserved-belief validator must
+                # remain visible even when custom beliefs fill the display.
+                priorities = {
+                    f"trust:bank:{s.get('bank_id')}": 0,
+                    "sentiment": 1,
+                    "inflation_expectation": 2,
+                }
+                belief_items.sort(key=lambda item: (
+                    priorities.get(str(item[0]),
+                                   3 if str(item[0]).startswith("trust:bank:") else 4),
+                    str(item[0]),
+                ))
+            lines.append("[BELIEFS] " + ", ".join(f"{k}={v}" for k, v in belief_items[:8]))
         mems = context.get("memories", [])
         if mems:
             label = (
