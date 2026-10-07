@@ -32,6 +32,9 @@ beliefs:
   enforce_reserved_ranges: true
   model_grounding_from_tick: 0
   model_max_reserved_step: 0.05
+  # New runs keep the current bank's trust and reserved baselines visible.
+  # Stored configs without this opt-in retain their original prompt ordering.
+  prioritize_reserved_belief_context: true
 
 population:
   # Persisted semantics-7 opt-in: baseline citizens remain fully active unless
