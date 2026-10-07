@@ -98,6 +98,10 @@ class _RequestBodyLimitMiddleware(RequestBodyLimitMiddleware):
     """Bound all HTTP bodies, including GET bodies forwarded by the agent proxy."""
 
 
+class _ProxyResponseLimitExceeded(RuntimeError):
+    """Internal transport signal, not a handled upstream HTTP exception."""
+
+
 def _bounded_world_response(run_app: Any) -> Any:
     """Cap ASGI response bytes before the in-process transport buffers them."""
     async def bounded(scope: Any, receive: Any, send: Any) -> None:
@@ -107,7 +111,7 @@ def _bounded_world_response(run_app: Any) -> Any:
             if message["type"] == "http.response.body":
                 total += len(message.get("body", b""))
                 if total > MAX_PROXY_RESPONSE_BYTES:
-                    raise _generic_error(502, "upstream_response_too_large")
+                    raise _ProxyResponseLimitExceeded("upstream response exceeded byte limit")
             await send(message)
         await run_app(scope, receive, capped_send)
     return bounded
@@ -1599,6 +1603,8 @@ def create_hosted_app(
                 data = upstream.json()
             except (ValueError, json.JSONDecodeError):
                 raise _generic_error(502, "invalid_upstream_response") from None
+        except _ProxyResponseLimitExceeded:
+            raise _generic_error(502, "upstream_response_too_large") from None
         except HTTPException:
             raise
         except Exception:
