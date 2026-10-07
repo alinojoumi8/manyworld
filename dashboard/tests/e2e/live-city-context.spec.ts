@@ -460,7 +460,11 @@ test("Atlas camera centers selections and restores keyboard pan and zoom through
   await expect(atlas).toHaveAttribute("data-camera", "25,20,3.05");
   await page.getByRole("button", { name: "Zoom into city", exact: true }).click();
   await expect(atlas).toHaveAttribute("data-camera", "25,20,3.4");
-  expect((await page.locator(".civic-city__agent[aria-pressed='true']").boundingBox())!.width).toBeLessThan(33);
+  // The 28px accessible target keeps the same 1.28 selection highlight at
+  // every camera zoom; zoom must not enlarge the screen-space marker itself.
+  const markerWidth=(await page.locator(".civic-city__agent[aria-pressed='true']").boundingBox())!.width;
+  expect(markerWidth).toBeGreaterThanOrEqual(28);
+  expect(markerWidth).toBeLessThan(37);
   await page.goBack();
   await expect(atlas).toHaveAttribute("data-camera", "25,20,3.05");
   await page.reload();

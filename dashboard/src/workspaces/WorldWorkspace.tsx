@@ -50,6 +50,14 @@ export function WorldWorkspace({panel,children}:{panel?:string;children?:ReactNo
   useEffect(()=>{if(!panel&&params.has('region')){const next=new URLSearchParams(params);next.delete('region');setParams(next,{replace:true});}},[panel,params,setParams]);
   const [proposal,setProposal]=useState<CityProposal>(null);
   const tick=observerState.tick;
+  // Snapshots describe the last committed day. Current clock state can change
+  // before the next snapshot commits, so never use snapshot status for Live.
+  const liveClock=tick==='live'&&!observerState.fork;
+  const clock=useQuery({
+    queryKey:['city-run-status',runId],
+    queryFn:({signal})=>workspaceApi<{run_id:string;status:string;running:boolean}>('/api/run/status',{signal}),
+    enabled:liveClock,retry:false,refetchInterval:1000,
+  });
   const city=useQuery({
     queryKey:['world-os',runId,observerState.fork,'world-city',tick,cityState.population],
     queryFn:({signal})=>loadCityProjection({...cityState,runId},path=>projectionApi(path,signal)),
@@ -58,6 +66,9 @@ export function WorldWorkspace({panel,children}:{panel?:string;children?:ReactNo
   });
   const frame=!city.error?city.data?.envelope:null;
   const summary=city.data?.overview.data.summary;
+  const status=liveClock
+    ? (!clock.isError&&clock.data?.run_id===runId ? (clock.data.running?'running':clock.data.status) : 'unavailable')
+    : summary?.status;
   const activity=useCityActivity(frame,!city.error?city.data?.activity:null);
   const markers=cityActivityMarkers(activity.data);
   const conversations=useQuery({
@@ -88,7 +99,7 @@ export function WorldWorkspace({panel,children}:{panel?:string;children?:ReactNo
       <CivicCity
         agents={frame?city.data?.agents:[]} firms={frame?city.data?.firms:[]} events={markers}
         map={frame?city.data?.map:null} frame={frame} civic={frame?city.data?.civic:null}
-        runtime={currentRuntime} runId={runId} tick={tick} phase={summary?.phase} status={summary?.status}
+        runtime={currentRuntime} runId={runId} tick={tick} phase={summary?.phase} status={status}
         loading={city.isLoading} error={city.error instanceof Error?city.error.message:''}
         connected={projection.transport.status==='live'} historical={tick!=='live'}
         variant="world-os" observerState={cityState} onObserverStateChange={updateCity} suspendSelectionRepair={Boolean(panel)}
@@ -99,7 +110,7 @@ export function WorldWorkspace({panel,children}:{panel?:string;children?:ReactNo
         lineage={frame?{semantics:frame.semantics_version,projection:frame.projection_version,policy:frame.policy_version}:null}
         render3d={({visibleAgents,selected}:any)=><Suspense fallback={<p role="status">Loading 3D city…</p>}>
           <CityViewport embedded envelope={frame} snapshot={activity.data} runId={runId} tick={tick}
-            status={summary?.status||''} stale={stale} loading={city.isLoading}
+            status={status||''} stale={stale} loading={city.isLoading}
             error={city.error instanceof Error?city.error.message:''} visibleAgentIds={visibleAgents.map((a:any)=>Number(a.id))}
             selectedAgentId={selected?.id??null} onSelect={updateCity} followId={cityState.follow} proposal={proposal} observerState={cityState}
             onFallback={()=>updateCity({view:'atlas'})}/>

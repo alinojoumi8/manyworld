@@ -36,9 +36,11 @@
   transform: translate(-50%, -50%) scale(var(--city-camera-inverse));
   transition: box-shadow 140ms ease;
 }
-/* A business owns the click when its workplace occupies the exact same pixel.
-   The keyboard explorer and business inspector expose both objects. */
-.city-atlas-plane .civic-city__place { pointer-events: auto; z-index: 2; }
+/* Markers are packed in screen space so co-located objects retain separate
+   click targets. Their canonical world coordinates remain unchanged. */
+.city-atlas-plane .civic-city__place { pointer-events: auto; z-index: 2; width: 28px; height: 28px; }
+.city-atlas-plane .civic-city__firm { min-height: 28px; clip-path: none; }
+.city-atlas-plane .civic-city__agent { min-width: 28px; min-height: 28px; }
 .city-atlas-plane .civic-city__place:is(:hover, :focus-visible, .is-selected) { z-index: 9; }
 .city-atlas-plane .civic-city__agent:is(:hover, .is-selected) {
   transform: translate(-50%, -50%) scale(calc(var(--city-camera-inverse) * 1.28));

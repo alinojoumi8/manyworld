@@ -222,6 +222,65 @@ def test_hermes_process_reaps_child_before_return_or_timeout(tmp_path, timeout):
         unrelated.wait()
 
 
+def test_receipt_completion_reaps_owned_process_before_budget(tmp_path):
+    child_pid = tmp_path / 'child.pid'
+    parent_pid = tmp_path / 'parent.pid'
+    parent = ('import subprocess,sys,time,pathlib,os; '
+        f'pathlib.Path({str(parent_pid)!r}).write_text(str(os.getpid())); '
+        'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"]); '
+        f'pathlib.Path({str(child_pid)!r}).write_text(str(p.pid)); time.sleep(60)')
+    unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    try:
+        result = run_hermes_process([sys.executable,'-c',parent],timeout=10,
+            completion_check=lambda:child_pid.exists())
+        assert result.receipt_complete and result.returncode == 0
+        assert not psutil.pid_exists(int(parent_pid.read_text()))
+        assert not psutil.pid_exists(int(child_pid.read_text()))
+        assert unrelated.poll() is None
+    finally:
+        unrelated.kill()
+        unrelated.wait()
+
+
+def test_receipt_completion_requires_this_wake_session(api_operator, monkeypatch, tmp_path):
+    operator = api_operator
+    home = tmp_path / 'home'
+    home.mkdir()
+    operator.root.mkdir(exist_ok=True)
+    write_json(home / 'agent-economy.json', {'access_token':'test-only'})
+    (home / 'config.yaml').write_text('model:\n  provider: openai-codex\n  default: gpt-5.6-luna\n')
+    with sqlite3.connect(home / 'state.db') as db:
+        db.execute('CREATE TABLE sessions(id TEXT)')
+        db.execute('CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,tool_name TEXT)')
+        db.executemany('INSERT INTO sessions VALUES (?)',[('citizen',),('unrelated',)])
+        db.execute("INSERT INTO messages(session_id,role,content) VALUES ('unrelated','user','Other wake')")
+    queued = []
+    clock = iter(range(100))
+    monkeypatch.setattr('scripts.hermes_citizens.time.monotonic',lambda:next(clock))
+    monkeypatch.setattr(operator,'receipts',lambda *args:queued)
+    monkeypatch.setattr(operator,'api',lambda *args,**kwargs:{'actor':{'id':1}})
+    def run(command, **kwargs):
+        check = kwargs['completion_check']
+        queued.append({'status':'queued'})
+        assert not check()  # Queued alone cannot identify a session.
+        prompt = Path(command[command.index('--query-file')+1]).read_text()
+        with sqlite3.connect(home / 'state.db') as db:
+            db.execute("INSERT INTO messages(session_id,role,content) VALUES ('citizen','user',?)",(prompt,))
+        assert not check()  # The queued tool response must also be saved.
+        with sqlite3.connect(home / 'state.db') as db:
+            db.execute("INSERT INTO messages(session_id,role,content,tool_name) VALUES ('citizen','tool',?,?)",
+                ('<untrusted_tool_result> {\\"status\\":\\"queued\\"}', 'mcp__agent_economy__ae_action_submit'))
+        queued[:] = [{'status':'rejected'}]
+        assert not check()
+        queued[:] = [{'status':'queued'}]
+        assert check()
+        return Namespace(returncode=0,receipt_complete=True)
+    monkeypatch.setattr('scripts.hermes_citizens.run_hermes_process',run)
+    result = operator.decision_attempt({'name':'Test','profile':'test','home':str(home),'goal':'Work'},2)
+    assert result['session_id']=='citizen' and result['receipt_complete']
+    assert json.loads((operator.root/'test/session.json').read_text())['session_id']=='citizen'
+
+
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux subreaper contract')
 @pytest.mark.parametrize('timeout', [False, True])
 def test_linux_guardian_reaps_reparented_descendant(tmp_path, timeout):
