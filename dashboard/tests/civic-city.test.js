@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   classifyAgentLayer,
   classifyEventLayer,
+  cityPersonHref,
   deriveCityModel,
   eventActorIds,
   resolveCityFilterPatch,
@@ -323,4 +324,17 @@ test("city construction preserves exact stored counters and aggregate privacy", 
       privacy: "aggregated_private",
     },
   );
+});
+
+test("person links encode simulation-supplied agent ids", () => {
+  assert.equal(
+    cityPersonHref("run/id", "1?x=2", "?tick=3"),
+    "/runs/run%2Fid/people/1%3Fx%3D2?tick=3",
+  );
+  assert.equal(
+    cityPersonHref("run-demo", "../../evil"),
+    "/runs/run-demo/people/..%2F..%2Fevil",
+  );
+  assert.equal(cityPersonHref("run-demo", null), null);
+  assert.equal(cityPersonHref("", 4), null);
 });

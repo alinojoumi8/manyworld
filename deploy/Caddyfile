@@ -1,6 +1,5 @@
 {
 	admin off
-	auto_https disable_redirects
 }
 
 {$AGENT_ECONOMY_PUBLIC_HOST:localhost} {

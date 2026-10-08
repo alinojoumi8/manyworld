@@ -52,6 +52,29 @@ test("product navigation omits citizenship links when the server does not offer 
   ]);
 });
 
+test("product navigation rejects off-origin and script hrefs from the server", () => {
+  const items = buildProductNavigation({
+    runId: "run-demo",
+    navigation: {
+      observatory: "javascript:alert(1)",
+      world_os: "https://evil.example/world",
+      commons: "//evil.example/commons",
+      join: "/\\evil.example/join",
+      my_agents: "/my-agents",
+    },
+  });
+
+  assert.deepEqual(
+    Object.fromEntries(items.map(item => [item.key, item.href])),
+    {
+      observatory: "/",
+      world_os: "/runs/run-demo/overview",
+      commons: "/runs/run-demo/commons",
+      my_agents: "/my-agents",
+    },
+  );
+});
+
 test("product navigation distinguishes Commons and citizen onboarding", () => {
   assert.equal(
     isProductNavigationActive("world_os", "/runs/run-demo/overview"),
