@@ -3,7 +3,10 @@
 This guide is the permanent process for deciding what to protect, review,
 merge, port, or delete. A dated branch audit records the current facts; this
 document defines the repeatable rules. The active audit is
-[the 2026-08-20 consolidation plan](plans/2026-08-20-branch-and-documentation-consolidation-plan.md).
+[the 2026-10-05 Manyworld branch and release plan](plans/2026-10-05-manyworld-branch-and-release-plan.md),
+with a [complete branch register](plans/2026-10-05-manyworld-branch-inventory.md).
+The [2026-08-20 consolidation plan](plans/2026-08-20-branch-and-documentation-consolidation-plan.md)
+remains a historical record.
 
 ## Safety rules
 
