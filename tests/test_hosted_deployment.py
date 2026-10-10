@@ -346,6 +346,7 @@ def test_hostinger_secret_mounts_fail_fast_when_keys_are_missing() -> None:
 def test_postgres_containers_drop_capabilities() -> None:
     for compose in (_compose(), _hostinger_compose()):
         postgres = compose["services"]["postgres"]
+        assert postgres["user"] == "postgres"
         assert postgres["cap_drop"] == ["ALL"]
         assert "no-new-privileges:true" in postgres["security_opt"]
 

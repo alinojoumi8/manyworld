@@ -3,7 +3,16 @@
 **Prepared:** 2026-10-07
 **Repository state:** `f27005b` (clean working tree; branch includes `4cd7833`, `2ad2871`, `1b74845`)
 **Scope:** the full-project security audit performed on 2026-10-07 (HTTP surface, simulation core, dashboard, deployment).
-**Purpose:** this is an execution brief for a *different* agent. It lists every finding that is still open, with exact locations, evidence, impact, fix direction, and the tests to add. Findings already fixed are listed separately in [Appendix A](#appendix-a--already-fixed-do-not-redo) so they are not redone.
+**Purpose:** audit and remediation record. The findings below preserve the original evidence and proposed fixes; the status table records the implemented disposition. Appendix A records earlier fixes.
+
+**Integration review (2026-10-09):** fresh-container testing caught a PostgreSQL
+startup regression with `cap_drop: ALL`. Both profiles now start directly as
+`postgres`; a fresh pinned-image database initialized the application and
+supervisor roles successfully. The pinned MinIO server/client were rebuilt and
+bootstrap was exercised with URL-reserved characters in disposable credentials.
+Navigation additionally rejects control characters that browser URL parsing
+would strip, and run IDs require a full-string match. No historical run was
+rewritten and no provider calls were made during these checks.
 
 > **Remediation record (2026-10-07):** every open finding below is fixed in the
 > working tree. Regression coverage lives in

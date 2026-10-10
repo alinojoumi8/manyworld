@@ -55,8 +55,14 @@ otherwise MinIO fails its health check and the app never starts:
 
 ```powershell
 docker compose --env-file .env -f deploy/compose.yaml run --rm --user 0:0 `
+  --cap-add CHOWN --cap-add DAC_OVERRIDE `
   --entrypoint chown minio -R 10001:10001 /data
 ```
+
+PostgreSQL starts directly as the image's `postgres` user, with all Linux
+capabilities dropped. Fresh named volumes initialize normally; an existing
+volume must retain its original PostgreSQL ownership. Do not recursively change
+database ownership during a running deployment.
 
 The migration job must complete successfully before the application starts.
 Bootstrap the first tenant/admin once, supplying the password through an

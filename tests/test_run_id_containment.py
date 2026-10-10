@@ -31,7 +31,7 @@ def test_contained_run_database_accepts_run_ids_and_contained_paths(tmp_path):
         str(inside), runs, accept_explicit_path=True) == inside.resolve()
 
 
-@pytest.mark.parametrize("value", ["../../x", "../x", "/abs/path/x", "a/b"])
+@pytest.mark.parametrize("value", ["../../x", "../x", "/abs/path/x", "a/b", "normal\n"])
 def test_contained_run_database_rejects_escaping_run_ids(tmp_path, value):
     runs = tmp_path / "runs"
     runs.mkdir()

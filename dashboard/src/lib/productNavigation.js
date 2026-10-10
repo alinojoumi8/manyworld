@@ -7,7 +7,7 @@ function encoded(value) {
 // javascript: URLs fall back to the built-in default (or are dropped).
 function sameOriginHref(value, fallback) {
   if (typeof value === "string" && value.startsWith("/")
-      && !value.startsWith("//") && !value.startsWith("/\\")) {
+      && !value.startsWith("//") && !/[\\\u0000-\u0020\u007f]/.test(value)) {
     return value;
   }
   return fallback;
