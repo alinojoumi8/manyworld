@@ -580,3 +580,8 @@ def test_scale_270_live_profiles_fail_closed_without_credentials(
     assert not report["ready"]
     assert report["errors"]
     assert any(key_name in error for error in report["errors"])
+
+
+@pytest.mark.parametrize('profile', [REHEARSAL, BASELINE_120, RECOVERY_120, RECOVERY_1000, MINIMAX, DEEPSEEK])
+def test_scale_270_profiles_keep_the_regional_cohort_fixed(profile):
+    assert load_config(profile)['living_world']['career_migration_enabled'] is False

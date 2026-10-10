@@ -27,6 +27,9 @@ banks:
 # post-Genesis distribution.
 living_world:
   enabled: true
+  # The scale acceptance contract holds regional allocation fixed in both arms.
+  # Ordinary worlds retain career migration by default.
+  career_migration_enabled: false
   core_agents: 100
   promotion_interval_ticks: 30
   require_trade_contract: true

@@ -48,6 +48,9 @@ class RegionalEconomy:
         self.fx_inventory = int(self.config.get("fx_market_maker_inventory", 100_000_000))
         self.migration_wage_gain_bps = max(
             0, int(self.config.get("migration_wage_gain_bps", 1_000)))
+        self.career_migration_enabled = self.config.get("career_migration_enabled", True)
+        if not isinstance(self.career_migration_enabled, bool):
+            raise ValueError("career_migration_enabled must be a boolean")
         self.max_trade_opportunities = max(
             1, min(5, int(self.config.get("max_trade_opportunities", 5))))
         self.max_trade_quantity = max(
@@ -347,7 +350,8 @@ class RegionalEconomy:
         career_day: bool,
         ignore_pending_migration_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        if (not career_day or str(agent["kind"]) != "citizen"
+        if (not self.career_migration_enabled
+                or not career_day or str(agent["kind"]) != "citizen"
                 or str(agent["health"] or "healthy") != "healthy"
                 or bool(agent["retired"])):
             return []
@@ -444,6 +448,8 @@ class RegionalEconomy:
         model cannot bypass the bounded prompt facts and an agent that becomes
         ineligible before settlement cannot move.
         """
+        if not self.career_migration_enabled:
+            return None, "career migration is disabled"
         agent = self.store.query_one("SELECT * FROM agents WHERE id=?", (actor_id,))
         if not agent or not bool(agent["alive"]):
             return None, "migration requires a living citizen"
@@ -737,6 +743,8 @@ class RegionalEconomy:
 
     def request_migration(self, tick: int, actor_id: int, destination_region_id: int,
                           reason: str = "") -> dict[str, Any]:
+        if not self.career_migration_enabled:
+            return {"ok": False, "reason": "career migration is disabled"}
         agent = self.store.query_one("SELECT region_id FROM agents WHERE id=? AND alive=1", (actor_id,))
         destination = self.store.query_one("SELECT 1 FROM regions WHERE id=?", (destination_region_id,))
         if not agent or not destination or agent["region_id"] is None or int(agent["region_id"]) == destination_region_id:
@@ -798,7 +806,7 @@ class RegionalEconomy:
                     }, phase="NIGHT_CLOSE", subject_type="agent", subject_id=agent_id,
                     importance=1.5)
                 continue
-            if self.engine_semantics_version >= 7:
+            if self.engine_semantics_version >= 7 or not self.career_migration_enabled:
                 _, ineligible_reason = self._qualified_migration_option(
                     int(migration["requested_tick"]), agent_id,
                     int(migration["destination_region_id"]),
