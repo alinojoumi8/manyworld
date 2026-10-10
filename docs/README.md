@@ -73,6 +73,9 @@ each audience can find the authoritative level of detail.
   implemented foundations from pending packages.
 - [Branch lifecycle and consolidation](branch-lifecycle.md) — protect active
   work, classify refs, port divergent commits, and gate deletion.
+- [Manyworld branch and release plan](plans/2026-10-05-manyworld-branch-and-release-plan.md) —
+  October 5 merge order, working-app acceptance and remaining launch gates;
+  includes the complete local and GitHub branch register.
 - [Documentation maintenance](documentation-maintenance.md) — source-of-truth
   hierarchy, update matrix, writing rules, and verification.
 - [Architecture decision records](adr/README.md) — accepted implementation

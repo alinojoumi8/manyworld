@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path, PurePosixPath
 
 import yaml
@@ -11,6 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _compose() -> dict:
     return yaml.safe_load((ROOT / "deploy" / "compose.yaml").read_text(encoding="utf-8"))
+
+
+def _hostinger_compose() -> dict:
+    return yaml.safe_load(
+        (ROOT / "deploy" / "hostinger" / "compose.yaml").read_text(encoding="utf-8")
+    )
 
 
 def test_hosted_compose_has_durable_control_plane_and_artifacts() -> None:
@@ -241,3 +248,116 @@ def test_example_public_origin_matches_the_only_published_https_port() -> None:
         f"https://localhost:{values['HTTPS_PORT']}"
     )
     assert "HTTP_PORT" not in values
+
+
+def test_minio_runs_unprivileged_with_dropped_capabilities() -> None:
+    services = _compose()["services"]
+
+    for name in ("minio", "minio-init"):
+        service = services[name]
+        assert service["read_only"] is True
+        assert service["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in service["security_opt"]
+        assert any(str(entry).startswith("/tmp") for entry in service["tmpfs"])
+
+    dockerfile = (ROOT / "deploy" / "minio" / "Dockerfile").read_text(encoding="utf-8")
+    # Both the server and client runtime stages drop to the same fixed UID.
+    assert dockerfile.count("USER 10001:10001") == 2
+    assert "chown 10001:10001 /data" in dockerfile
+
+
+def test_minio_init_keeps_credentials_out_of_process_argv() -> None:
+    source = (ROOT / "deploy" / "compose.yaml").read_text(encoding="utf-8")
+
+    # Root and S3 credentials are piped to mc from the environment; no mc
+    # process carries a secret in argv. MC_HOST_local is avoided because
+    # URL-reserved characters in a strong password would corrupt the URL.
+    assert "MC_HOST_local:" not in source
+    assert 'mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}"' not in source
+    assert 'mc admin user add local "$${S3_ACCESS_KEY_ID}" "$${S3_SECRET_ACCESS_KEY}"' not in source
+    assert (
+        r"""printf '%s\n%s\n' "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" """
+        r"""| mc alias set local http://minio:9000"""
+    ) in source
+    assert (
+        r"""printf '%s\n%s\n' "$${S3_ACCESS_KEY_ID}" "$${S3_SECRET_ACCESS_KEY}" """
+        r"""| mc admin user add local"""
+    ) in source
+
+    script = (ROOT / "deploy" / "postgres" / "init" / "001_roles.sh").read_text(
+        encoding="utf-8")
+    assert "--set=app_password" not in script
+    assert "--set=supervisor_password" not in script
+    assert "\\getenv app_password APP_DATABASE_PASSWORD" in script
+    assert "\\getenv supervisor_password SUPERVISOR_DATABASE_PASSWORD" in script
+
+
+def test_deploy_files_never_pass_passwords_via_set_arguments() -> None:
+    offenders = []
+    for path in (ROOT / "deploy").rglob("*"):
+        if not path.is_file() or path.suffix not in {".sh", ".yaml", ".yml"}:
+            continue
+        if re.search(r"set=[^\s\"']*password", path.read_text(encoding="utf-8"),
+                     re.IGNORECASE):
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_prometheus_lifecycle_api_is_disabled() -> None:
+    for compose_path in (ROOT / "deploy" / "compose.yaml",
+                         ROOT / "deploy" / "hostinger" / "compose.yaml"):
+        source = compose_path.read_text(encoding="utf-8")
+        assert "--web.enable-lifecycle" not in source
+        service = yaml.safe_load(source)["services"]["prometheus"]
+        assert service["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in service["security_opt"]
+
+
+def test_riskiest_images_are_pinned_by_digest_in_both_profiles() -> None:
+    for compose in (_compose(), _hostinger_compose()):
+        services = compose["services"]
+        assert re.fullmatch(
+            r"postgres:17-bookworm@sha256:[a-f0-9]{64}",
+            services["postgres"]["image"])
+        assert re.fullmatch(
+            r"caddy:2-alpine@sha256:[a-f0-9]{64}",
+            services["caddy"]["image"])
+
+
+def test_caddy_keeps_http_redirect_and_acme_http_challenge_available() -> None:
+    caddyfile = (ROOT / "deploy" / "Caddyfile").read_text(encoding="utf-8")
+    assert "auto_https disable_redirects" not in caddyfile
+
+
+def test_hostinger_secret_mounts_fail_fast_when_keys_are_missing() -> None:
+    services = _hostinger_compose()["services"]
+
+    for name in ("app", "litestream", "catalog-backup"):
+        secret_mounts = [
+            mount for mount in services[name]["volumes"]
+            if isinstance(mount, dict)
+            and mount.get("target") == "/run/secrets/backup_key"
+        ]
+        assert len(secret_mounts) == 1, name
+        assert secret_mounts[0]["bind"] == {"create_host_path": False}, name
+        assert secret_mounts[0]["read_only"] is True, name
+
+
+def test_postgres_containers_drop_capabilities() -> None:
+    for compose in (_compose(), _hostinger_compose()):
+        postgres = compose["services"]["postgres"]
+        assert postgres["user"] == "postgres"
+        assert postgres["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in postgres["security_opt"]
+
+
+def test_dockerignore_excludes_local_operational_artifacts() -> None:
+    patterns = {
+        line.strip()
+        for line in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    assert {
+        ".claude", ".hypothesis", ".qoder", ".superpowers",
+        "builder_workspace", "graphify-out", "logs",
+    } <= patterns

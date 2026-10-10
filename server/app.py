@@ -84,7 +84,9 @@ _HOSTED_PATH_KEYS = frozenset({"path", "database", "db", "db_path"})
 _HOSTED_PATH_KEY_SUFFIXES = (
     "_path", "_paths", "_dir", "_directory", "_file", "_root")
 _FILESYSTEM_PATH_VALUE = re.compile(
-    r"^(?:[A-Za-z]:[\\/]|\\\\|/(?!/))[^\r\n]*"
+    # Absolute/drive/UNC paths, or any value carrying a directory separator
+    # (a relative path such as "reports/out/run.html" must not slip through).
+    r"^(?!https?://)(?:(?:[A-Za-z]:[\\/]|\\\\|/(?!/))|[^\r\n]*[\\/])[^\r\n]*"
     r"\.(?:db|sqlite3?|json|jsonl|html|md|log|yaml|yml|txt|csv|parquet)$",
     re.IGNORECASE,
 )
@@ -117,6 +119,33 @@ def _hosted_safe_document(value):
     if isinstance(value, str) and _FILESYSTEM_PATH_VALUE.match(value.strip()):
         return "[redacted-path]"
     return value
+
+
+ACCEPTANCE_CACHE_TTL_SECONDS = 2.0
+# A hosted run is shared by every reader of its tenant. Without a floor, one
+# authenticated observer can keep the full-database acceptance evaluation
+# running on a worker thread; after the short coalescing window, hosted readers
+# receive the cached document marked stale until this interval elapses.
+ACCEPTANCE_HOSTED_REFRESH_SECONDS = 30.0
+
+
+def _acceptance_document(value, *, hosted_safe: bool, stale: bool = False,
+                         retry_after: int | None = None):
+    """Render an acceptance document, flagging a served cache entry as stale.
+
+    Local mode is a single operator and returns the document unchanged. Hosted
+    readers never see local paths, and a stale response stays HTTP 200 with a
+    ``Retry-After`` hint instead of forcing another full evaluation.
+    """
+    if not hosted_safe:
+        return value
+    document = _hosted_safe_document(value)
+    if not stale:
+        return document
+    if isinstance(document, dict):
+        document = {**document, "stale": True}
+    headers = {"Retry-After": str(retry_after)} if retry_after is not None else None
+    return JSONResponse(status_code=200, content=document, headers=headers)
 
 
 def _report_artifact_metadata(path: str, tick: int) -> dict:
@@ -561,16 +590,34 @@ def create_app(world: World, *, served_ticks: int | None = None,
                 return _hosted_safe_document(result) if hosted_safe else result
         # A production database can be hundreds of MB. The evidence evaluator
         # reconciles the ledger and builds causal shock traces, so keep it off
-        # the asyncio event loop and coalesce dashboard refreshes for two seconds.
+        # the asyncio event loop and coalesce dashboard refreshes for two
+        # seconds. Hosted readers additionally get a stale-flagged cache hit
+        # until ACCEPTANCE_HOSTED_REFRESH_SECONDS passes, so one authenticated
+        # observer cannot pin a full evaluation on a worker thread.
+        def cached_response(*, stale: bool = False):
+            age = time.monotonic() - acceptance_cache["evaluated_at"]
+            retry_after = max(1, int(ACCEPTANCE_HOSTED_REFRESH_SECONDS - age) + 1)
+            return _acceptance_document(
+                acceptance_cache["result"], hosted_safe=hosted_safe,
+                stale=stale, retry_after=retry_after)
+
         now = time.monotonic()
         cached = acceptance_cache["result"]
-        if cached is not None and now - acceptance_cache["evaluated_at"] < 2.0:
-            return _hosted_safe_document(cached) if hosted_safe else cached
+        if cached is not None:
+            age = now - acceptance_cache["evaluated_at"]
+            if age < ACCEPTANCE_CACHE_TTL_SECONDS:
+                return cached_response()
+            if hosted_safe and age < ACCEPTANCE_HOSTED_REFRESH_SECONDS:
+                return cached_response(stale=True)
         async with acceptance_lock:
             now = time.monotonic()
             cached = acceptance_cache["result"]
-            if cached is not None and now - acceptance_cache["evaluated_at"] < 2.0:
-                return _hosted_safe_document(cached) if hosted_safe else cached
+            if cached is not None:
+                age = now - acceptance_cache["evaluated_at"]
+                if age < ACCEPTANCE_CACHE_TTL_SECONDS:
+                    return cached_response()
+                if hosted_safe and age < ACCEPTANCE_HOSTED_REFRESH_SECONDS:
+                    return cached_response(stale=True)
             from reports.acceptance import evaluate_acceptance
             result = {
                 "configured": True,
@@ -578,7 +625,7 @@ def create_app(world: World, *, served_ticks: int | None = None,
             }
             result["orchestration"] = controller.status()["acceptance_orchestration"]
             acceptance_cache.update(result=result, evaluated_at=time.monotonic())
-            return _hosted_safe_document(result) if hosted_safe else result
+            return _acceptance_document(result, hosted_safe=hosted_safe)
 
     # ── participant mode (P2 R18, sandbox only) ─────────────────────────────
     def participant_error(exc: ParticipantError):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from pathlib import Path
 from typing import Any, Literal
 
@@ -118,7 +119,11 @@ def install_v2_routes(app, world, controller, *, operator_workspace=None) -> Non
     else:
         workspace_path = operator_workspace.path
     app.state.operator_workspace = operator_workspace
-    csrf_token = str(workspace_config.get("csrf_token", "local-observatory"))
+    # Local mode has no login; rotate the CSRF secret per process/run instead
+    # of publishing a shared default. Browsers still cannot attach the custom
+    # header cross-origin without a successful preflight.
+    csrf_token = str(
+        workspace_config.get("csrf_token") or secrets.token_urlsafe(32))
     from server.city_observations_api import install_city_observation_routes
     install_city_observation_routes(app, world, controller, operator_workspace, csrf_token=csrf_token)
     from server.research_api import install_research_routes

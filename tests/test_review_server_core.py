@@ -38,14 +38,40 @@ def test_hosted_safe_document_strips_database_keys_and_path_values():
         "report_dir": "reports/out",
         "artifacts": [{"json": "/var/lib/agent-economy/runs/abc/acceptance.json"}],
         "link": "/api/v2/map",
+        "public_report": "https://example.com/reports/summary.json",
         "detail": {"nested_path": "x", "ok": True},
+        "report": "reports/out/report_abc.html",
+        "note": "saved to data/runs/x.db",
     }
     safe = _hosted_safe_document(document)
     assert "database" not in safe["run"] and safe["run"]["seed"] == 7
     assert "report_dir" not in safe
     assert safe["artifacts"] == [{"json": "[redacted-path]"}]
     assert safe["link"] == "/api/v2/map"
+    assert safe["public_report"] == "https://example.com/reports/summary.json"
     assert safe["detail"] == {"ok": True}
+    # Relative artifact paths under neutral keys must not survive the redactor.
+    assert safe["report"] == "[redacted-path]"
+    assert safe["note"] == "[redacted-path]"
+
+
+def test_hosted_payload_sanitizer_redacts_relative_artifact_paths():
+    from hosted.app import sanitize_public_payload
+
+    payload = {
+        "report": "reports/out/report_abc.html",
+        "note": "saved to data/runs/x.db",
+        "link": "/api/v2/map",
+        "public_report": "https://example.com/reports/summary.json",
+        "title": "Quarterly report",
+    }
+    safe = sanitize_public_payload(payload)
+
+    assert safe["report"] == "[REDACTED]"
+    assert safe["note"] == "[REDACTED]"
+    assert safe["link"] == "/api/v2/map"
+    assert safe["public_report"] == "https://example.com/reports/summary.json"
+    assert safe["title"] == "Quarterly report"
 
 
 def test_scrub_error_text_hides_filesystem_paths_but_keeps_urls():
