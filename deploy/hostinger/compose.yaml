@@ -32,6 +32,7 @@ x-app-base: &app-base
 services:
   postgres:
     image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    user: postgres
     environment:
       POSTGRES_DB: agent_economy
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}

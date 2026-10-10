@@ -65,7 +65,7 @@ def _contained_run_database(value: str, data_dir: Path = DATA_DIR, *,
     if accept_explicit_path and candidate.exists():
         resolved = candidate.resolve()
     else:
-        if not RUN_ID_PATTERN.match(raw):
+        if not RUN_ID_PATTERN.fullmatch(raw):
             raise ValueError(
                 f"invalid run id {raw!r}: expected [A-Za-z0-9_-]{{1,64}}")
         resolved = (data_root / f"{raw}.db").resolve()

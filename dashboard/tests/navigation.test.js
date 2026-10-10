@@ -75,6 +75,13 @@ test("product navigation rejects off-origin and script hrefs from the server", (
   );
 });
 
+test("product navigation rejects URL-parser control-character normalization", () => {
+  for (const href of ["/\t/evil.example", "/\n/evil.example", "/\r/evil.example", "/ok\\evil"]) {
+    const items = buildProductNavigation({ navigation: { observatory: href } });
+    assert.equal(items.find(item => item.key === "observatory").href, "/");
+  }
+});
+
 test("product navigation distinguishes Commons and citizen onboarding", () => {
   assert.equal(
     isProductNavigationActive("world_os", "/runs/run-demo/overview"),
