@@ -86,7 +86,7 @@ _HOSTED_PATH_KEY_SUFFIXES = (
 _FILESYSTEM_PATH_VALUE = re.compile(
     # Absolute/drive/UNC paths, or any value carrying a directory separator
     # (a relative path such as "reports/out/run.html" must not slip through).
-    r"^(?:(?:[A-Za-z]:[\\/]|\\\\|/(?!/))|[^\r\n]*[\\/])[^\r\n]*"
+    r"^(?!https?://)(?:(?:[A-Za-z]:[\\/]|\\\\|/(?!/))|[^\r\n]*[\\/])[^\r\n]*"
     r"\.(?:db|sqlite3?|json|jsonl|html|md|log|yaml|yml|txt|csv|parquet)$",
     re.IGNORECASE,
 )

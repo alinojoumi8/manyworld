@@ -13,6 +13,8 @@ bootstrap was exercised with URL-reserved characters in disposable credentials.
 Navigation additionally rejects control characters that browser URL parsing
 would strip, and run IDs require a full-string match. No historical run was
 rewritten and no provider calls were made during these checks.
+The artifact redactors preserve HTTP(S) report URLs while still removing
+relative filesystem artifacts; regressions cover both public response paths.
 
 > **Remediation record (2026-10-07):** every open finding below is fixed in the
 > working tree. Regression coverage lives in
