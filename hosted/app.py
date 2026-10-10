@@ -433,7 +433,7 @@ _ABSOLUTE_LOCAL_PATH = re.compile(
 # Relative artifact paths ("reports/out/run.html", "data/runs/x.db") carry no
 # leading separator; both redactors must still catch them under neutral keys.
 _RELATIVE_ARTIFACT_PATH = re.compile(
-    r"^[^\r\n]*[\\/][^\r\n]*"
+    r"^(?!https?://)[^\r\n]*[\\/][^\r\n]*"
     r"\.(?:db|sqlite3?|json|jsonl|html|md|log|yaml|yml|txt|csv|parquet)$",
     re.IGNORECASE,
 )
