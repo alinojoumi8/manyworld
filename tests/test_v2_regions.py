@@ -769,3 +769,77 @@ def test_core_memory_rollup_interval_is_configurable(v2_world):
     assert store.scalar(
         "SELECT COUNT(*) FROM memories WHERE agent_id=? "
         "AND kind='weekly_summary'", (core_id,)) == 1
+
+
+@pytest.mark.parametrize("setting", [None, True, False])
+def test_career_migration_control_preserves_default_and_rejects_fixed_cohort(tmp_path, setting):
+    config = load_config("runs/v2.yaml")
+    config["engine_semantics_version"] = 7
+    if setting is not None:
+        config["living_world"]["career_migration_enabled"] = setting
+    store, world, _ = open_run(config, None, None, data_dir=tmp_path)
+    try:
+        actor = store.query_one(
+            "SELECT a.* FROM agents a WHERE a.kind='citizen' AND a.alive=1 "
+            "AND a.health='healthy' AND a.retired=0 AND a.role IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM firms f WHERE f.founder_agent_id=a.id) "
+            "AND NOT EXISTS (SELECT 1 FROM employments e WHERE e.agent_id=a.id "
+            "AND e.status='active') ORDER BY a.id LIMIT 1")
+        destination, tick = _qualified_migration_destination(store, actor)
+        regions = world.economy.regions
+        context = regions.decision_context(int(actor['id']), tick=tick, career_day=True)
+        ledger_rows = store.scalar('SELECT COUNT(*) FROM ledger_entries')
+        result = regions.request_migration(tick, int(actor['id']), destination)
+        if setting is False:
+            assert context['migration_options'] == []
+            assert result == {'ok': False, 'reason': 'career migration is disabled'}
+            assert store.scalar('SELECT COUNT(*) FROM migrations') == 0
+            assert store.scalar('SELECT COUNT(*) FROM ledger_entries') == ledger_rows
+        else:
+            assert context['migration_options']
+            assert result['ok']
+            regions.run_nightly(tick + 1)
+            assert store.scalar('SELECT region_id FROM agents WHERE id=?', (actor['id'],)) == destination
+        ok, diagnostic = world.economy.ledger.reconcile()
+        assert ok, diagnostic
+    finally:
+        world.close()
+
+
+@pytest.mark.parametrize('semantics', [2, 7])
+def test_disabled_career_migration_rejects_pending_settlement(tmp_path, semantics):
+    config = load_config('runs/v2.yaml')
+    config['engine_semantics_version'] = semantics
+    config['living_world']['career_migration_enabled'] = False
+    store, world, _ = open_run(config, None, None, data_dir=tmp_path)
+    try:
+        actor = store.query_one(
+            "SELECT a.* FROM agents a WHERE a.kind='citizen' AND a.alive=1 "
+            "AND a.health='healthy' AND a.retired=0 AND a.role IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM firms f WHERE f.founder_agent_id=a.id) "
+            "AND NOT EXISTS (SELECT 1 FROM employments e WHERE e.agent_id=a.id "
+            "AND e.status='active') ORDER BY a.id LIMIT 1")
+        origin = int(actor['region_id'])
+        destination, tick = _qualified_migration_destination(store, actor)
+        migration = store.insert('migrations', agent_id=int(actor['id']), origin_region_id=origin,
+            destination_region_id=destination, requested_tick=tick, reason='injected pending request', status='pending')
+        ledger_rows = store.scalar('SELECT COUNT(*) FROM ledger_entries')
+        world.economy.regions.run_nightly(tick + 1)
+        assert store.scalar('SELECT status FROM migrations WHERE id=?', (migration,)) == 'rejected'
+        assert store.scalar('SELECT region_id FROM agents WHERE id=?', (actor['id'],)) == origin
+        assert store.scalar('SELECT COUNT(*) FROM ledger_entries') == ledger_rows
+        ok, diagnostic = world.economy.ledger.reconcile()
+        assert ok, diagnostic
+    finally:
+        world.close()
+
+
+@pytest.mark.parametrize('setting', [None, 0, 1, 'false'])
+def test_career_migration_control_rejects_non_boolean_config(v2_world, setting):
+    from engine.regions import RegionalEconomy
+
+    _, world = v2_world
+    regions = world.economy.regions
+    with pytest.raises(ValueError, match='career_migration_enabled must be a boolean'):
+        RegionalEconomy(regions.store, regions.ledger, regions.legal, regions.prng,
+            {'career_migration_enabled': setting})
