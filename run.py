@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
@@ -44,6 +45,34 @@ from observability import configure_logging, get_logger, log_event as operationa
 from run_config import load_config
 
 DATA_DIR = Path("data/runs")
+# Run ids selectable by CLI flags. Mirrors the HTTP replay reader's bound in
+# server/replay.py; run ids never contain path separators or dots.
+RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _contained_run_database(value: str, data_dir: Path = DATA_DIR, *,
+                            accept_explicit_path: bool = False) -> Path:
+    """Resolve a run id (or contained run database path) under ``data_dir``.
+
+    Rejects run ids that do not match ``RUN_ID_PATTERN`` and any path that
+    resolves outside the run data root, so a flag value can never select an
+    out-of-tree database. Symlinks are resolved before the containment check.
+    Callers report a missing file after this returns.
+    """
+    data_root = Path(data_dir).resolve()
+    raw = str(value or "")
+    candidate = Path(raw)
+    if accept_explicit_path and candidate.exists():
+        resolved = candidate.resolve()
+    else:
+        if not RUN_ID_PATTERN.fullmatch(raw):
+            raise ValueError(
+                f"invalid run id {raw!r}: expected [A-Za-z0-9_-]{{1,64}}")
+        resolved = (data_root / f"{raw}.db").resolve()
+    if resolved.parent != data_root:
+        raise ValueError(
+            f"run target {raw!r} escapes the run data root {data_root}")
+    return resolved
 DEFAULT_CONFIG = "runs/evolving-live.yaml"
 logger = get_logger("cli")
 REPLAY_INPUT_TABLES = (
@@ -672,7 +701,10 @@ def open_run(config: dict, resume: str | None, replay: str | None, *,
     data_dir.mkdir(parents=True, exist_ok=True)
     if resume:
         run_id = resume
-        db = data_dir / f"{run_id}.db"
+        try:
+            db = _contained_run_database(run_id, data_dir)
+        except ValueError as exc:
+            raise ValueError(f"invalid --resume target: {exc}") from None
         if not db.exists():
             sys.exit(f"run database not found: {db}")
         store = Store(str(db))
@@ -799,17 +831,57 @@ def fork_run(spec: str, data_dir: Path = DATA_DIR, *, upgrade_semantics: int | N
     src = Path(spec)
     if not src.exists() and "@" in spec:
         run_id, _, tick_s = spec.partition("@")
-        parent_db = data_dir / f"{run_id}.db"
+        try:
+            tick = int(tick_s)
+        except ValueError:
+            sys.exit(f"invalid fork tick: {tick_s!r}")
+        if tick < 0:
+            sys.exit(f"invalid fork tick: {tick_s!r}")
+        try:
+            parent_db = _contained_run_database(run_id, data_dir)
+        except ValueError as exc:
+            sys.exit(str(exc))
         if not parent_db.exists():
             sys.exit(f"run database not found: {parent_db}")
         parent = Store(str(parent_db), read_only=True)
-        row = parent.query_one(
-            "SELECT path, tick FROM checkpoints WHERE tick<=? ORDER BY tick DESC, id DESC LIMIT 1",
-            (int(tick_s),))
-        parent.close()
+        try:
+            parent_meta = parent.get_meta()
+            if str(parent_meta["run_id"]) != run_id:
+                sys.exit(
+                    f"run database {parent_db} does not identify as {run_id}")
+            parent_config = json.loads(parent_meta["config_json"])
+            checkpoint_root = Path(
+                parent_config.get("checkpoint_dir", "data/checkpoints")
+            ).resolve()
+            row = parent.query_one(
+                "SELECT path, tick FROM checkpoints WHERE tick<=? ORDER BY tick DESC, id DESC LIMIT 1",
+                (tick,))
+        finally:
+            parent.close()
         if not row:
             sys.exit(f"no checkpoint at or before tick {tick_s} for run {run_id}")
-        src = Path(row["path"])
+        try:
+            checkpoint_tick = int(row["tick"])
+        except (TypeError, ValueError):
+            sys.exit(f"run {run_id} stores an invalid checkpoint tick")
+        if checkpoint_tick < 0:
+            sys.exit(f"run {run_id} stores an invalid checkpoint tick")
+        # Derive the checkpoint path from the run's configured checkpoint root
+        # instead of trusting the stored checkpoints.path column. A tampered
+        # row must not redirect the copy at an arbitrary file.
+        src = checkpoint_root / f"{run_id}_t{checkpoint_tick}.db"
+        if src.parent != checkpoint_root or src.resolve() != src:
+            sys.exit(f"checkpoint path escapes its checkpoint root: {src}")
+        if str(row["path"]) != str(src):
+            sys.exit(
+                f"checkpoint record for run {run_id} disagrees with its derived path")
+    if src.exists():
+        if not src.is_file() or src.suffix != ".db":
+            sys.exit(f"fork source must be a run checkpoint database: {src}")
+        if (src.is_symlink() or src.resolve() != src.absolute()
+                or src.stat().st_nlink != 1):
+            sys.exit(f"fork source must be an unaliased regular file: {src}")
+        src = src.resolve()
     if not src.exists():
         sys.exit(f"checkpoint not found: {src}")
 
@@ -1592,7 +1664,10 @@ def main() -> None:
         return
 
     if args.report:
-        db = DATA_DIR / f"{args.report}.db"
+        try:
+            db = _contained_run_database(args.report, DATA_DIR)
+        except ValueError as exc:
+            ap.error(str(exc))
         if not db.exists():
             sys.exit(f"run database not found: {db}")
         store = Store(str(db))
@@ -1601,9 +1676,11 @@ def main() -> None:
         return
 
     if args.export_static:
-        source = Path(args.export_static)
-        if not source.exists():
-            source = DATA_DIR / f"{args.export_static}.db"
+        try:
+            source = _contained_run_database(
+                args.export_static, DATA_DIR, accept_explicit_path=True)
+        except ValueError as exc:
+            ap.error(str(exc))
         if not source.exists():
             sys.exit(f"run database not found: {source}")
         # A stored run is a scientific artifact: export from a read-only handle
@@ -1685,14 +1762,19 @@ def main() -> None:
     if args.oracle_campaign_run:
         _execute_oracle_campaign_run(config, args)
         return
-    store, world, run_id = open_run(
-        config,
-        args.resume,
-        args.replay,
-        replay_source_dir=args.replay_source_dir,
-        activate_entrepreneurship=args.activate_entrepreneurship,
-        activate_numeric_grounding=args.activate_numeric_grounding,
-    )
+    try:
+        store, world, run_id = open_run(
+            config,
+            args.resume,
+            args.replay,
+            replay_source_dir=args.replay_source_dir,
+            activate_entrepreneurship=args.activate_entrepreneurship,
+            activate_numeric_grounding=args.activate_numeric_grounding,
+        )
+    except ValueError as exc:
+        # Rejected run-id/path containment and replay-root checks are operator
+        # input errors, not crashes.
+        ap.error(str(exc))
     effective_config = world.config
     if args.activate_supply_recovery:
         try:

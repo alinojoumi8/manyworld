@@ -6,6 +6,13 @@
 **/*.py[cod]
 .venv
 .worktrees
+.claude
+.hypothesis
+.qoder
+.superpowers
+builder_workspace
+graphify-out
+logs
 dashboard/node_modules
 node_modules
 data

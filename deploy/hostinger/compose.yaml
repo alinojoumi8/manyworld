@@ -31,7 +31,8 @@ x-app-base: &app-base
 
 services:
   postgres:
-    image: postgres:17-bookworm
+    image: postgres:17-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826
+    user: postgres
     environment:
       POSTGRES_DB: agent_economy
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
@@ -43,6 +44,8 @@ services:
       - ../postgres/init:/docker-entrypoint-initdb.d:ro
       - ./postgres/002_backup_role.sh:/docker-entrypoint-initdb.d/002_backup_role.sh:ro
     networks: [backend]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     healthcheck:
       test: [CMD-SHELL, "pg_isready -U postgres -d agent_economy"]
       interval: 5s
@@ -83,7 +86,11 @@ services:
     command: [serve, --config, /app/config/hosted.hostinger.yaml, --host, 0.0.0.0, --port, "8000"]
     volumes:
       - run-data:/var/lib/agent-economy
-      - ./secrets/restore_key:/run/secrets/backup_key:ro
+      - type: bind
+        source: ./secrets/restore_key
+        target: /run/secrets/backup_key
+        read_only: true
+        bind: {create_host_path: false}
     depends_on:
       migrate: {condition: service_completed_successfully}
       litestream: {condition: service_healthy}
@@ -103,7 +110,11 @@ services:
     command: [replicate, -config, /app/deploy/hostinger/litestream.yml]
     volumes:
       - run-data:/var/lib/agent-economy
-      - ./secrets/backup_key:/run/secrets/backup_key:ro
+      - type: bind
+        source: ./secrets/backup_key
+        target: /run/secrets/backup_key
+        read_only: true
+        bind: {create_host_path: false}
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9090/metrics', timeout=3).read()"]
       interval: 10s
@@ -128,7 +139,11 @@ services:
     read_only: true
     tmpfs: [/tmp:size=2g,mode=1777]
     volumes:
-      - ./secrets/catalog_key:/run/secrets/backup_key:ro
+      - type: bind
+        source: ./secrets/catalog_key
+        target: /run/secrets/backup_key
+        read_only: true
+        bind: {create_host_path: false}
     depends_on:
       migrate: {condition: service_completed_successfully}
     security_opt: [no-new-privileges:true]
@@ -177,13 +192,14 @@ services:
       - prometheus-data:/prometheus
     networks: [backend]
     security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
     logging:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
     restart: unless-stopped
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     environment:
       AGENT_ECONOMY_PUBLIC_HOST: ${AGENT_ECONOMY_PUBLIC_HOST:?set the public domain}
     ports: ["80:80", "443:443"]

@@ -166,9 +166,14 @@ def test_hostinger_deployment_has_no_amazon_dependency_and_bounds_logs():
     for service in services.values():
         assert service["logging"]["options"] == {"max-size": "10m", "max-file": "3"}
     assert services["litestream"]["volumes"][0] == services["app"]["volumes"][0]
-    assert "restore_key" in services["app"]["volumes"][1]
-    assert "./secrets/backup_key" in services["litestream"]["volumes"][1]
-    assert "catalog_key" in services["catalog-backup"]["volumes"][0]
+    for name, key in (("app", "restore_key"), ("litestream", "backup_key"),
+                      ("catalog-backup", "catalog_key")):
+        mount = next(mount for mount in services[name]["volumes"]
+                     if isinstance(mount, dict)
+                     and mount.get("target") == "/run/secrets/backup_key")
+        assert mount["source"] == f"./secrets/{key}"
+        assert mount["read_only"] is True
+        assert mount["bind"]["create_host_path"] is False
     assert "AE_RESTORE_SFTP_USER" in services["app"]["environment"]["AE_BACKUP_SFTP_USER"]
     assert "AE_CATALOG_SFTP_USER" in services["catalog-backup"]["environment"]["AE_BACKUP_SFTP_USER"]
     assert services["catalog-backup"]["environment"]["PGUSER"] == "agent_economy_backup"
