@@ -5,7 +5,10 @@
 Local mode remains a single-operator research observatory with no
 authentication, authorization, tenant isolation, or CSRF protection. Bind
 `run.py --serve` and the Vite development server to `127.0.0.1`; never expose
-either directly to an untrusted network.
+either directly to an untrusted network. The local v2 operator workspace still
+requires its custom CSRF header, and that token now rotates per process instead
+of defaulting to a public constant; it remains a request-shape guard, not an
+authentication boundary.
 
 R22 adds a separately enabled hosted service. Its security boundary is:
 
@@ -23,9 +26,13 @@ R22 adds a separately enabled hosted service. Its security boundary is:
 - one schema-v11 SQLite world per run, one active writer lease per run, and
   immutable checksummed local/S3-compatible snapshots;
 - a non-root read-only application container behind Caddy TLS, with PostgreSQL,
-  MinIO, and Prometheus on an internal network.
+  MinIO, and Prometheus on an internal network; PostgreSQL, MinIO, and
+  Prometheus run without capabilities or privilege escalation, the Prometheus
+  lifecycle API is disabled, and the PostgreSQL and Caddy images are pinned by
+  digest;
 - a MinIO root identity restricted to bootstrap and a separate bucket/prefix-
-  scoped runtime identity that can write/read snapshots but cannot delete them.
+  scoped runtime identity that can write/read snapshots but cannot delete them;
+  bootstrap credentials stay out of init-container process argv.
 
 The local and hosted servers are distinct entry points. Hosted mode does not
 turn the unauthenticated local API into an internet-safe service.
@@ -50,6 +57,9 @@ mutating credential state. Every hosted HTTP method has the same 64 KiB body
 limit, including GET requests that pass through the agent proxy.
 Rate-limit denials add at most one audit row per connection/minute; rejected
 traffic does not create an unbounded audit trail in a paused run.
+Hosted acceptance-status reads are coalesced for two seconds and then served
+stale with a `Retry-After` hint for a 30-second floor, so one authenticated
+observer cannot pin the full-database evidence evaluation on a worker thread.
 
 Local HTTP bodies are capped at 1 MiB, including chunked requests. The hosted
 proxy caps response bodies before its ASGI transport buffers them and supplies
@@ -88,7 +98,8 @@ administrator, deployment environment, and TLS termination are trusted.
 Before any public deployment:
 
 - use a managed secret store or protected environment injection and rotate all
-  bootstrap/database/object-store credentials;
+  bootstrap/database/object-store credentials, including the `BYPASSRLS`
+  catalog-backup role (see the operator runbook's independent rotation step);
 - for an existing reference PostgreSQL volume, use the profile-gated
   `rotate-database-passwords` job in the operator runbook; editing `.env` alone
   does not alter stored role passwords;
@@ -142,12 +153,16 @@ ordinary code-review and release process before any later implementation.
 
 - Put provider credentials only in the ignored `.env` file or process
   environment.
+- Bootstrap/init jobs read database and object-store credentials from the
+  environment or standard input; never place them in container argv, where
+  `/proc/<pid>/cmdline` can expose them to local users.
 - Never add keys to YAML profiles, reports, screenshots, issues, or pull
   requests.
 - Treat run databases as potentially sensitive: they can contain prompts,
   model responses, personas, memories, conversations, and decision evidence.
 - Operational logging redacts credential-shaped fields, but review artifacts
-  before sharing them outside the project.
+  before sharing them outside the project. Hosted redaction strips both
+  absolute and relative artifact-path values in addition to path-shaped keys.
 - Revoke a provider key immediately if it is exposed and remove it from Git
   history rather than only deleting it in a later commit.
 

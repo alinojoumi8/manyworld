@@ -427,11 +427,23 @@ def _uuid_attribute(value: Any, *names: str) -> UUID:
         raise RuntimeError("identity service returned an invalid identifier") from exc
 
 
+_ABSOLUTE_LOCAL_PATH = re.compile(
+    r"(?:[A-Za-z]:[\\/]|\\\\|/(?:Users|home|tmp|var|opt|srv|mnt|data)/)"
+)
+# Relative artifact paths ("reports/out/run.html", "data/runs/x.db") carry no
+# leading separator; both redactors must still catch them under neutral keys.
+_RELATIVE_ARTIFACT_PATH = re.compile(
+    r"^(?!https?://)[^\r\n]*[\\/][^\r\n]*"
+    r"\.(?:db|sqlite3?|json|jsonl|html|md|log|yaml|yml|txt|csv|parquet)$",
+    re.IGNORECASE,
+)
+
+
 def _json_scalar(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
-        if isinstance(value, str) and re.match(
-            r"(?:[A-Za-z]:[\\/]|\\\\|/(?:Users|home|tmp|var|opt|srv|mnt|data)/)",
-            value,
+        if isinstance(value, str) and (
+            _ABSOLUTE_LOCAL_PATH.match(value)
+            or _RELATIVE_ARTIFACT_PATH.match(value)
         ):
             return "[REDACTED]"
         return value

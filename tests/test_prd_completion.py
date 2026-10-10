@@ -3766,6 +3766,108 @@ def test_local_mode_probe_reports_non_hosted_v2_api(tmp_path):
     }
 
 
+def test_hosted_acceptance_refresh_is_cooldown_bounded(tmp_path, monkeypatch):
+    import reports.acceptance as acceptance_report
+    import server.app as server_app
+
+    world = _world(
+        tmp_path, "hosted-acceptance.db",
+        acceptance={"min_ticks": 1, "min_agents": 0, "max_agents": 100},
+    )
+    calls = {"count": 0}
+
+    def counted(path):
+        calls["count"] += 1
+        return {"passed": False, "checks": []}
+
+    monkeypatch.setattr(acceptance_report, "evaluate_acceptance", counted)
+    monkeypatch.setattr(server_app, "ACCEPTANCE_CACHE_TTL_SECONDS", 0.0)
+    monkeypatch.setattr(server_app, "ACCEPTANCE_HOSTED_REFRESH_SECONDS", 3600.0)
+    try:
+        with TestClient(create_app(world, hosted_safe=True)) as client:
+            # The first hosted observer read runs one full evaluation...
+            first = client.get("/api/acceptance/status")
+            assert first.status_code == 200
+            assert first.json()["configured"] is True
+            assert calls["count"] == 1
+
+            # ...back-to-back reads are served from cache with a stale flag
+            # and a Retry-After hint instead of pinning another full pass.
+            second = client.get("/api/acceptance/status")
+            assert second.status_code == 200
+            assert second.json()["stale"] is True
+            assert int(second.headers["retry-after"]) >= 1
+            assert calls["count"] == 1
+
+            # Once the floor elapses, a new evaluation is allowed.
+            monkeypatch.setattr(
+                server_app, "ACCEPTANCE_HOSTED_REFRESH_SECONDS", 0.0)
+            third = client.get("/api/acceptance/status")
+            assert third.status_code == 200
+            assert "stale" not in third.json()
+            assert calls["count"] == 2
+    finally:
+        world.store.close()
+
+
+def test_local_acceptance_refresh_keeps_single_operator_behaviour(
+        tmp_path, monkeypatch):
+    import reports.acceptance as acceptance_report
+    import server.app as server_app
+
+    world = _world(
+        tmp_path, "local-acceptance.db",
+        acceptance={"min_ticks": 1, "min_agents": 0, "max_agents": 100},
+    )
+    calls = {"count": 0}
+
+    def counted(path):
+        calls["count"] += 1
+        return {"passed": False, "checks": []}
+
+    monkeypatch.setattr(acceptance_report, "evaluate_acceptance", counted)
+    monkeypatch.setattr(server_app, "ACCEPTANCE_CACHE_TTL_SECONDS", 0.0)
+    monkeypatch.setattr(server_app, "ACCEPTANCE_HOSTED_REFRESH_SECONDS", 3600.0)
+    try:
+        with TestClient(create_app(world)) as client:
+            first = client.get("/api/acceptance/status")
+            second = client.get("/api/acceptance/status")
+        assert first.status_code == second.status_code == 200
+        assert "stale" not in second.json()
+        assert calls["count"] == 2
+    finally:
+        world.store.close()
+
+
+def test_operator_session_csrf_token_rotates_per_app(tmp_path):
+    world = _world(tmp_path, "csrf-rotation.db")
+    try:
+        with TestClient(create_app(world)) as client:
+            token = client.get("/api/v2/operator/session").json()["csrf_token"]
+            forged = client.post(
+                "/api/v2/operator/investigations",
+                headers={"X-CSRF-Token": "local-observatory"},
+                json={"title": "forged"},
+            )
+            assert forged.status_code == 403
+            accepted = client.post(
+                "/api/v2/operator/investigations",
+                headers={"X-CSRF-Token": token},
+                json={"title": "rotated"},
+            )
+            assert accepted.status_code == 200
+
+        with TestClient(create_app(world)) as second_client:
+            second_token = second_client.get(
+                "/api/v2/operator/session").json()["csrf_token"]
+
+        assert token != "local-observatory"
+        assert second_token != "local-observatory"
+        assert second_token != token
+    finally:
+        world.store.close()
+
+
 def test_each_required_shock_has_a_logged_downstream_effect(tmp_path):
     async def fire(kind: str, params: dict, name: str) -> World:
         world = _world(tmp_path, name)

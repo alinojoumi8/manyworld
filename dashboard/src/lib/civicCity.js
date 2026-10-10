@@ -16,6 +16,13 @@ export function semanticReceiptForEvent(event, receipts = []) {
   return receipts.find(receipt => String(receipt?.eventId) === String(event.id)) || null;
 }
 
+/** Run-scoped person link. Every segment is percent-encoded: agent ids come
+ *  from simulation data and must not be able to alter the route. */
+export function cityPersonHref(runId, agentId, suffix = "") {
+  if (!runId || agentId === null || agentId === undefined) return null;
+  return `/runs/${encodeURIComponent(runId)}/people/${encodeURIComponent(agentId)}${suffix}`;
+}
+
 export const CITY_DISTRICTS = {
   institutions: {
     id: "institutions",
