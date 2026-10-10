@@ -13,8 +13,9 @@ fi
 psql --set=ON_ERROR_STOP=1 \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
-  --set=app_password="$APP_DATABASE_PASSWORD" \
-  --set=supervisor_password="$SUPERVISOR_DATABASE_PASSWORD" <<'SQL'
+<<'SQL'
+\getenv app_password APP_DATABASE_PASSWORD
+\getenv supervisor_password SUPERVISOR_DATABASE_PASSWORD
 SELECT format(
   'CREATE ROLE agent_economy_app LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS',
   :'app_password'

@@ -30,7 +30,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 minio \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin minio
+# ``mc`` stores its alias/config cache under $HOME; the runtime mount is
+# read-only, so point it at the tmpfs both compose services mount.
+ENV HOME=/tmp
 
 FROM runtime AS server
 LABEL org.opencontainers.image.source="https://github.com/minio/minio" \
@@ -38,7 +43,8 @@ LABEL org.opencontainers.image.source="https://github.com/minio/minio" \
       org.opencontainers.image.version="RELEASE.2025-10-15T17-29-55Z-source"
 COPY --from=server-build /out/minio /usr/local/bin/minio
 COPY --from=server-build /out/notices/ /usr/share/doc/minio/
-RUN mkdir /data
+RUN mkdir /data && chown 10001:10001 /data
+USER 10001:10001
 EXPOSE 9000 9001
 ENTRYPOINT ["minio"]
 CMD ["server", "/data"]
@@ -49,4 +55,5 @@ LABEL org.opencontainers.image.source="https://github.com/minio/mc" \
       org.opencontainers.image.version="RELEASE.2025-08-13T08-35-41Z-source"
 COPY --from=client-build /out/mc /usr/local/bin/mc
 COPY --from=client-build /out/notices/ /usr/share/doc/mc/
+USER 10001:10001
 ENTRYPOINT ["mc"]

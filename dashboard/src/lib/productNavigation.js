@@ -2,6 +2,17 @@ function encoded(value) {
   return encodeURIComponent(String(value || ""));
 }
 
+// Server-supplied navigation is untrusted: accept only same-origin relative
+// paths. Protocol-relative ("//evil"), backslash-normalized ("/\evil"), and
+// javascript: URLs fall back to the built-in default (or are dropped).
+function sameOriginHref(value, fallback) {
+  if (typeof value === "string" && value.startsWith("/")
+      && !value.startsWith("//") && !/[\\\u0000-\u0020\u007f]/.test(value)) {
+    return value;
+  }
+  return fallback;
+}
+
 export function buildProductNavigation({
   runId = "",
   navigation = null,
@@ -27,7 +38,7 @@ export function buildProductNavigation({
     { key: "my_agents", label: "My Agents", clientSide: false },
   ].map(item => ({
     ...item,
-    href: navigation?.[item.key] || defaults[item.key],
+    href: sameOriginHref(navigation?.[item.key], defaults[item.key]),
   })).filter(item => Boolean(item.href));
 }
 

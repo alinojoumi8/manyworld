@@ -31,6 +31,7 @@ import "./civic-diorama.css";
 import {
   CITY_DISTRICTS,
   CITY_LAYERS,
+  cityPersonHref,
   deriveCityModel,
   filterCityAgents,
   humanize,
@@ -303,14 +304,12 @@ export function CivicCity(props) {
     camera: observerState ? observerState.camera : localCamera });
   const commonSuffix = commonParams.toString() ? `?${commonParams}` : "";
   const firmHref = selectedFirm && runId
-    ? `/runs/${encodeURIComponent(runId)}/organizations/firm/${selectedFirm.id}${commonSuffix}` : null;
+    ? `/runs/${encodeURIComponent(runId)}/organizations/firm/${encodeURIComponent(selectedFirm.id)}${commonSuffix}` : null;
   const priceParams = new URLSearchParams(commonParams);
   priceParams.set("view", "prices");
   if (selectedFirm) priceParams.set("price_firm", String(selectedFirm.id));
   const pricesHref = selectedFirm && runId ? `/runs/${encodeURIComponent(runId)}/markets?${priceParams}` : null;
-  const peopleHref = selected && runId
-    ? `/runs/${encodeURIComponent(runId)}/people/${selected.id}${commonSuffix}`
-    : null;
+  const peopleHref = cityPersonHref(runId, selected?.id, commonSuffix);
   const traceParams = new URLSearchParams(commonParams);
   if (selected?.event) traceParams.set("event", String(selected.event.id));
   const traceHref = selected?.event && runId
@@ -947,7 +946,7 @@ export function CivicCity(props) {
         {societySelected ? <CitySocietyEvidence household={selectedHousehold} institution={selectedInstitution}
           requested={selectedHouseholdId != null ? `Household #${selectedHouseholdId}` : selectedInstitutionId}
           tick={model.selectedTick} onPerson={inspectHouseholdPerson}
-          personHref={runId ? id => `/runs/${encodeURIComponent(runId)}/people/${id}${commonSuffix}` : null}
+          personHref={runId ? id => cityPersonHref(runId, id, commonSuffix) : null}
           reason={selectedHouseholdId != null ? society.households.reason : society.institutions.reason}
         /> : selectedFirm ? <>
           <div className="civic-city__identity">
