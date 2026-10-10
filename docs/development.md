@@ -408,6 +408,12 @@ When the bundle changed intentionally, review and commit every generated file.
 
 The maintained scale lane evaluates 270 sampled citizens, which Genesis expands
 to 308 persisted agents after institutional staff and health-economy founders.
+Its regional cohort is fixed at 184/69/55 throughout acceptance. Both diagnostic
+arms and their inherited canaries use
+`living_world.career_migration_enabled: false`, suppressing advertised career
+moves and rejecting requests and pending
+settlement. Ordinary worlds omit this option and retain existing migration
+behavior. This control does not govern household moves in later semantics.
 Run the provider-free diagnostic arms in separate ignored directories:
 
 ```bash
