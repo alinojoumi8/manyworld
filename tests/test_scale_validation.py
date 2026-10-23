@@ -521,3 +521,63 @@ def test_incremental_prepare_accepts_restored_engine(tmp_path):
                                          data_dir=tmp_path / 'runs', approve_live=False)
     assert prepared['checkpoint_format'] == 'incremental-v2'
     assert prepared['checkpoint_dir'] == str(tmp_path / 'runs/source/checkpoints')
+
+
+@pytest.mark.parametrize("pause_reason, expected_pause", [
+    ({"reason": "resource_guard", "breaches": ["system_swap"],
+      "system_swap_percent": 81.2, "available_memory_gb": 83.0,
+      "process_rss_mb": 400.0, "detail": "Bearer private-fixture-token"},
+     {"reason": "resource_guard", "breaches": ["system_swap"],
+      "system_swap_percent": 81.2, "available_memory_gb": 83.0,
+      "process_rss_mb": 400.0}),
+    ({"reason": "private /home/test/world.db", "error": "Bearer private-fixture-token"},
+     {"reason": "unavailable"}),
+])
+def test_incomplete_source_keeps_safe_evidence_without_starting_replay(
+    tmp_path, monkeypatch, pause_reason, expected_pause,
+):
+    from world.loop import World
+
+    original_run = World.run
+
+    async def pause_after_first_tick(world, *args, **kwargs):
+        record_tick = world.on_tick
+
+        def pause(tick, summary):
+            record_tick(tick, summary)
+            if tick == 1:
+                world.last_pause_reason = pause_reason
+                world.request_pause()
+
+        world.on_tick = pause
+        return await original_run(world, *args, **kwargs)
+
+    # Exercise real world execution, checkpoint publication and SQLite cleanup.
+    # Only the external pause boundary is injected; no formal experiment runs.
+    monkeypatch.setattr(World, "run", pause_after_first_tick)
+    output_dir = tmp_path / "output"
+    with pytest.raises(RuntimeError):
+        run_validation(REHEARSAL, ticks=2, label="source-paused",
+                       output_dir=output_dir, data_dir=tmp_path / "runs",
+                       approve_live=False)
+
+    failures = list(output_dir.glob("source-paused-*.failure.json"))
+    assert len(failures) == 1, "a paused source must retain its failure receipt"
+    serialized = failures[0].read_text()
+    receipt = json.loads(serialized)
+    assert receipt["passed"] is False
+    assert receipt["target_ticks"] == 2
+    assert receipt["source"]["tick"] == 1
+    assert receipt["source"]["status"] == "paused"
+    assert receipt["source"]["pause"] == expected_pause
+    assert receipt["source"]["sha256"]
+    assert receipt["source"]["artifact_manifest"]
+    assert receipt["runtime"]["checkpoints"][0]["artifact"]
+    assert len(receipt["runtime"]["ticks"]) == 1
+    assert receipt["runtime"]["memory"]["samples"] > 0
+    assert receipt["runtime"]["database"]["genesis"]["logical_used_bytes"] > 0
+    assert receipt["replay"] == {"attempted": False, "proof": None}
+    assert not list((tmp_path / "runs" / "replay").glob("*.db"))
+    assert "private-fixture-token" not in serialized
+    assert str(tmp_path) not in serialized
+    validate_receipt_safety(receipt)

@@ -12,6 +12,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -265,6 +266,26 @@ def verification_error_receipt(error: Exception) -> dict[str, str | int]:
             result["message"] = message
     elif isinstance(error, OSError) and type(error.errno) is int and error.errno in errno.errorcode:
         result.update(errno=error.errno, message=f"replay verification failed ({errno.errorcode[error.errno]})")
+    return result
+
+
+def _source_pause_receipt(reason: object) -> dict[str, object]:
+    """Keep only known resource diagnostics, never arbitrary provider errors."""
+    if not isinstance(reason, Mapping) or reason.get("reason") != "resource_guard":
+        return {"reason": "unavailable"}
+    result: dict[str, object] = {"reason": "resource_guard"}
+    breaches = reason.get("breaches")
+    if isinstance(breaches, list):
+        result["breaches"] = [item for item in breaches if item in (
+            "system_cpu", "system_memory", "available_memory", "system_swap")]
+    for key in (
+        "system_cpu_percent", "system_memory_percent", "available_memory_gb",
+        "system_swap_percent", "available_swap_gb", "process_rss_mb",
+        "global_in_flight", "global_queue_depth",
+    ):
+        value = reason.get(key)
+        if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            result[key] = value
     return result
 
 
@@ -718,6 +739,7 @@ def run_validation(
     verification_error = None
     verification_stats: dict[str, Any] = {}
     population_evidence = None
+    incomplete_source = None
     try:
         sampler.stage = "genesis"
         genesis_started = time.perf_counter()
@@ -798,6 +820,20 @@ def run_validation(
         asyncio.run(source_world.run(max_ticks=ticks))
         source_wall_s = time.perf_counter() - source_started
         source_meta = dict(source_store.get_meta())
+        if not (int(source_meta["tick"]) == ticks
+                and source_meta["active_tick"] is None
+                and str(source_meta["status"]) == "finished"):
+            incomplete_source = {
+                "run_id": source_run_id,
+                "database": _artifact_id(source_path, artifact_root),
+                "tick": int(source_meta["tick"]),
+                "status": str(source_meta["status"]),
+                "active_tick": source_meta["active_tick"],
+                "phase": source_meta["next_phase"],
+                "pause": _source_pause_receipt(source_world.last_pause_reason),
+            }
+            final_open_database = _database_snapshot(source_store)
+            raise RuntimeError("source stopped before requested target; see failure receipt")
         population = _inspect_population(source_store)
         population_ok = population == EXPECTED_POPULATION
         population_contract = (
@@ -863,6 +899,40 @@ def run_validation(
             source_store.close()
         sampler.stage = "finalize"
         memory = sampler.stop()
+        if incomplete_source is not None:
+            assert source_path is not None
+            finalize_sqlite_artifact(source_path)
+            failure = {
+                "schema": "agent-economy-scale-validation-failure-v1",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "label": label,
+                "source_commit": _git_head(),
+                "target_ticks": ticks,
+                "effective_config_sha256": _sha256_bytes(
+                    _canonical_json(normalized_config).encode("utf-8")),
+                "source": {
+                    **incomplete_source,
+                    "sha256": _sha256_file(source_path),
+                    "artifact_manifest": _artifact_manifest(
+                        source_root, artifact_root, role="source"),
+                },
+                "runtime": {
+                    "source_wall_s": round(source_wall_s, 6),
+                    "ticks": tick_records,
+                    "checkpoints": checkpoint_records,
+                    "memory": memory,
+                    "database": {
+                        "genesis": genesis_database,
+                        "final_open": final_open_database,
+                        "final_closed": _database_files(source_path),
+                    },
+                },
+                "replay": {"attempted": False, "proof": None},
+                "passed": False,
+            }
+            validate_receipt_safety(failure, secret_values=_secret_values(config))
+            _atomic_write_json(
+                output_dir / f"{label}-{source_run_id}.failure.json", failure)
 
     assert source_path is not None and replay_path is not None
     conversation_pairs = int(config["budget"]["conversation_pairs"])
