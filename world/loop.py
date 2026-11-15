@@ -1220,6 +1220,8 @@ class World:
         keep = (self.storage_policy.checkpoint_keep_last if self.storage_policy
                 else self.config.get("checkpoint_keep_last"))
         discard = ()
+        ordered = []
+        max_archive_bytes = self.storage_policy.checkpoint_max_bytes if self.storage_policy else 0
         if type(keep) is int and keep > 0:
             ordered = sorted(set(candidates + [dest]),
                              key=lambda p: int(p.name.rsplit("_t", 1)[1].split(".", 1)[0]),
@@ -1229,7 +1231,8 @@ class World:
         return {"base": base, "discard": discard,
                 "recover_base": True,
                 "collect": type(keep) is int and keep > 0,
-                "max_archive_bytes": self.storage_policy.checkpoint_max_bytes if self.storage_policy else 0,
+                "budget_candidates": tuple(ordered) if max_archive_bytes else (),
+                "max_archive_bytes": max_archive_bytes,
                 "min_free_bytes": self.storage_policy.min_free_bytes if self.storage_policy else 0}
 
     def _incremental_catalog_cleanup(self, receipt: dict) -> None:

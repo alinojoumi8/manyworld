@@ -46,6 +46,35 @@ def test_materialization_preserves_readonly_archive(world, tmp_path, monkeypatch
             p.chmod(mode)
 
 
+def test_fork_materializes_without_a_source_archive_lock(world, tmp_path):
+    from engine.store import Store
+    from run import fork_run
+
+    source = tmp_path / "frozen"
+    source.mkdir()
+    descriptor = source / "source.icp.json"
+    save_incremental(world.store.path, descriptor)
+    (source / ".checkpoint-v2/.lock").unlink()
+    before = _manifest(source)
+    modes = {path: stat.S_IMODE(path.stat().st_mode)
+             for path in [source, *source.rglob("*")]}
+    child_dir = tmp_path / "forks"
+    try:
+        for path in modes:
+            path.chmod(0o555 if path.is_dir() else 0o444)
+        child_id = fork_run(str(descriptor), data_dir=child_dir)
+        child = Store(str(child_dir / f"{child_id}.db"), read_only=True)
+        try:
+            assert child.get_meta()["run_id"] == child_id
+            assert child.get_meta()["parent_run_id"] == "chunk-test"
+        finally:
+            child.close()
+        assert _manifest(source) == before
+    finally:
+        for path, mode in modes.items():
+            path.chmod(mode)
+
+
 def test_concurrent_pruning_rejects_reader_without_publishing(world, tmp_path, monkeypatch):
     import engine.incremental_checkpoint as module
     descriptor = tmp_path / 'checkpoint.icp.json'

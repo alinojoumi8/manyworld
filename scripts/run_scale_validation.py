@@ -740,6 +740,7 @@ def run_validation(
     verification_stats: dict[str, Any] = {}
     population_evidence = None
     incomplete_source = None
+    source_error = None
     try:
         sampler.stage = "genesis"
         genesis_started = time.perf_counter()
@@ -802,6 +803,8 @@ def run_validation(
             return result
 
         def record_tick(tick: int, summary: dict[str, object]) -> None:
+            if summary.get("paused") or summary.get("interrupted"):
+                return
             tick_records.append({
                 "tick": int(tick),
                 "wall_s": float(summary.get("wall_s", 0.0)),
@@ -817,22 +820,33 @@ def run_validation(
         source_world.on_tick = record_tick
         sampler.stage = "source_run"
         source_started = time.perf_counter()
-        asyncio.run(source_world.run(max_ticks=ticks))
-        source_wall_s = time.perf_counter() - source_started
-        source_meta = dict(source_store.get_meta())
-        if not (int(source_meta["tick"]) == ticks
-                and source_meta["active_tick"] is None
-                and str(source_meta["status"]) == "finished"):
-            incomplete_source = {
-                "run_id": source_run_id,
-                "database": _artifact_id(source_path, artifact_root),
-                "tick": int(source_meta["tick"]),
-                "status": str(source_meta["status"]),
-                "active_tick": source_meta["active_tick"],
-                "phase": source_meta["next_phase"],
-                "pause": _source_pause_receipt(source_world.last_pause_reason),
-            }
-            final_open_database = _database_snapshot(source_store)
+        try:
+            asyncio.run(source_world.run(max_ticks=ticks))
+        except Exception as exc:
+            source_error = exc
+            raise
+        finally:
+            source_wall_s = time.perf_counter() - source_started
+            try:
+                source_meta = dict(source_store.get_meta())
+                if (int(source_meta["tick"]) != ticks
+                        or source_meta["active_tick"] is not None
+                        or source_meta["status"] != "finished"):
+                    final_open_database = _database_snapshot(source_store)
+                    incomplete_source = {
+                        "run_id": source_run_id,
+                        "database": _artifact_id(source_path, artifact_root),
+                        "tick": int(source_meta["tick"]),
+                        "status": str(source_meta["status"]),
+                        "active_tick": source_meta["active_tick"],
+                        "phase": source_meta["next_phase"],
+                        "pause": _source_pause_receipt(source_world.last_pause_reason),
+                    }
+            except Exception as exc:
+                if source_error is None:
+                    raise
+                source_error.add_note(f"could not capture source state: {type(exc).__name__}")
+        if incomplete_source is not None:
             raise RuntimeError("source stopped before requested target; see failure receipt")
         population = _inspect_population(source_store)
         population_ok = population == EXPECTED_POPULATION
@@ -889,50 +903,55 @@ def run_validation(
         replay_manifest = _artifact_manifest(
             replay_root, artifact_root, role="replay")
     finally:
-        if replay_world is not None:
-            replay_world.close()
-        elif replay_store is not None:
-            replay_store.close()
-        if source_world is not None:
-            source_world.close()
-        elif source_store is not None:
-            source_store.close()
-        sampler.stage = "finalize"
-        memory = sampler.stop()
-        if incomplete_source is not None:
-            assert source_path is not None
-            finalize_sqlite_artifact(source_path)
-            failure = {
-                "schema": "agent-economy-scale-validation-failure-v1",
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "label": label,
-                "source_commit": _git_head(),
-                "target_ticks": ticks,
-                "effective_config_sha256": _sha256_bytes(
-                    _canonical_json(normalized_config).encode("utf-8")),
-                "source": {
-                    **incomplete_source,
-                    "sha256": _sha256_file(source_path),
-                    "artifact_manifest": _artifact_manifest(
-                        source_root, artifact_root, role="source"),
-                },
-                "runtime": {
-                    "source_wall_s": round(source_wall_s, 6),
-                    "ticks": tick_records,
-                    "checkpoints": checkpoint_records,
-                    "memory": memory,
-                    "database": {
-                        "genesis": genesis_database,
-                        "final_open": final_open_database,
-                        "final_closed": _database_files(source_path),
+        try:
+            if replay_world is not None:
+                replay_world.close()
+            elif replay_store is not None:
+                replay_store.close()
+            if source_world is not None:
+                source_world.close()
+            elif source_store is not None:
+                source_store.close()
+            sampler.stage = "finalize"
+            memory = sampler.stop()
+            if incomplete_source is not None:
+                assert source_path is not None
+                finalize_sqlite_artifact(source_path)
+                failure = {
+                    "schema": "agent-economy-scale-validation-failure-v1",
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "label": label,
+                    "source_commit": _git_head(),
+                    "target_ticks": ticks,
+                    "effective_config_sha256": _sha256_bytes(
+                        _canonical_json(normalized_config).encode("utf-8")),
+                    "source": {
+                        **incomplete_source,
+                        "sha256": _sha256_file(source_path),
+                        "artifact_manifest": _artifact_manifest(
+                            source_root, artifact_root, role="source"),
                     },
-                },
-                "replay": {"attempted": False, "proof": None},
-                "passed": False,
-            }
-            validate_receipt_safety(failure, secret_values=_secret_values(config))
-            _atomic_write_json(
-                output_dir / f"{label}-{source_run_id}.failure.json", failure)
+                    "runtime": {
+                        "source_wall_s": round(source_wall_s, 6),
+                        "ticks": tick_records,
+                        "checkpoints": checkpoint_records,
+                        "memory": memory,
+                        "database": {
+                            "genesis": genesis_database,
+                            "final_open": final_open_database,
+                            "final_closed": _database_files(source_path),
+                        },
+                    },
+                    "replay": {"attempted": False, "proof": None},
+                    "passed": False,
+                }
+                validate_receipt_safety(failure, secret_values=_secret_values(config))
+                _atomic_write_json(
+                    output_dir / f"{label}-{source_run_id}.failure.json", failure)
+        except Exception as exc:
+            if source_error is None:
+                raise
+            source_error.add_note(f"could not finalize source evidence: {type(exc).__name__}")
 
     assert source_path is not None and replay_path is not None
     conversation_pairs = int(config["budget"]["conversation_pairs"])

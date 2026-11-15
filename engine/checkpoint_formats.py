@@ -36,7 +36,7 @@ def checkpoint_database(path: str | Path, *, max_bytes: int = 64 * 1024**3,
     if not is_incremental(source):
         yield source
         return
-    from engine.incremental_checkpoint import _restore_incremental
+    from engine.incremental_checkpoint import materialize_incremental
     # Reader scratch belongs outside the scientific source tree. TMPDIR can
     # select a private disk location; callers may also pass one explicitly.
     parent = Path(scratch_dir) if scratch_dir is not None else None
@@ -45,5 +45,5 @@ def checkpoint_database(path: str | Path, *, max_bytes: int = 64 * 1024**3,
         # Immutable roots/packs are fully verified without opening a source
         # writer lock. Concurrent pruning may reject this read; every chunk and
         # SQLite proof is checked before any materialized copy is published.
-        _restore_incremental(source, target, max_bytes=max_bytes)
+        materialize_incremental(source, target, max_bytes=max_bytes)
         yield target

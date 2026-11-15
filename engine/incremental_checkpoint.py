@@ -16,7 +16,7 @@ import sqlite3
 import tempfile
 import time
 from datetime import datetime, timezone
-from collections import deque
+from collections import Counter, deque
 from contextlib import ExitStack, nullcontext
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from functools import lru_cache
@@ -440,15 +440,43 @@ def _publish(descriptor: Path, declaration: dict) -> None:
         raise IncrementalCheckpointError("linked checkpoint descriptor")
     fd, name = tempfile.mkstemp(dir=descriptor.parent)
     temporary = Path(name)
+    backup = None
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(canonical_json_bytes(declaration))
             handle.flush()
             os.fsync(handle.fileno())
+        if descriptor.exists():
+            if not descriptor.is_file():
+                raise IncrementalCheckpointError("checkpoint descriptor is not a regular file")
+            backup_fd, backup_name = tempfile.mkstemp(prefix=".descriptor-backup-",
+                                                      dir=descriptor.parent)
+            backup = Path(backup_name)
+            with os.fdopen(backup_fd, "wb") as output, descriptor.open("rb") as previous:
+                shutil.copyfileobj(previous, output)
+                output.flush()
+                os.fsync(output.fileno())
+            shutil.copystat(descriptor, backup)
         os.replace(temporary, descriptor)
-        _fsync_directory(descriptor.parent)
+        try:
+            _fsync_directory(descriptor.parent)
+        except OSError as exc:
+            rollback, backup = backup, None
+            try:
+                if rollback is None:
+                    descriptor.unlink()
+                else:
+                    os.replace(rollback, descriptor)
+                _fsync_directory(descriptor.parent)
+            except OSError as rollback_error:
+                exc.add_note(f"checkpoint publication rollback failed: {rollback_error}")
+                if rollback is not None and rollback.exists():
+                    exc.add_note(f"previous descriptor retained at {rollback}")
+            raise
     finally:
         temporary.unlink(missing_ok=True)
+        if backup is not None:
+            backup.unlink(missing_ok=True)
 
 
 def _record_catalog(source, target, tick, run_id):
@@ -486,6 +514,7 @@ def save_incremental(source: str | Path, descriptor: str | Path,
                      *, base: str | Path | None = None,
                      max_archive_bytes: int = 0, min_free_bytes: int = 0,
                      discard: tuple[Path, ...] = (), collect: bool = False,
+                     budget_candidates: tuple[Path, ...] = (),
                      recover_base: bool = False, catalog_tick: int | None = None) -> dict:
     started = time.perf_counter()
     if Path(source).resolve() == Path(descriptor).resolve():
@@ -502,7 +531,8 @@ def save_incremental(source: str | Path, descriptor: str | Path,
         if pin.exists() or _linked(pin):
             raise IncrementalCheckpointError("cannot replace a pinned checkpoint")
         options = {"max_archive_bytes": max_archive_bytes, "min_free_bytes": min_free_bytes,
-                   "discard": discard, "collect": collect, "catalog_tick": catalog_tick}
+                   "discard": discard, "collect": collect,
+                   "budget_candidates": budget_candidates, "catalog_tick": catalog_tick}
         try:
             receipt = _save_incremental(source, descriptor, base=base, **options)
         except CheckpointBaseError as exc:
@@ -751,7 +781,7 @@ def _save_incremental(source: str | Path, descriptor: str | Path,
                       *, base: str | Path | None = None,
                       max_archive_bytes: int = 0, min_free_bytes: int = 0,
                       discard: tuple[Path, ...] = (), collect: bool = False,
-                      catalog_tick: int | None = None) -> dict:
+                      budget_candidates: tuple[Path, ...] = (), catalog_tick: int | None = None) -> dict:
     """Capture, validate and durably publish; all required work is timed."""
     started = time.perf_counter()
     target = Path(descriptor).absolute()
@@ -902,7 +932,8 @@ def _save_incremental(source: str | Path, descriptor: str | Path,
     if free < min_free_bytes + len(encoded) + 4096:
         raise StorageBudgetExceeded("free_space", free, min_free_bytes + len(encoded) + 4096)
     _immutable(archive / (digest + ".root"), encoded)
-    if discard or collect:
+    maintain_archive = discard or collect or (max_archive_bytes and budget_candidates)
+    if maintain_archive:
         # Retention needs this root again. Read back every stored byte before
         # reusing its already validated decoded metadata under the same lock.
         # No stat-only or cross-save proof is cached, and corruption cannot
@@ -919,13 +950,17 @@ def _save_incremental(source: str | Path, descriptor: str | Path,
         _record_catalog(source, target, catalog_tick, evidence["state"]["run_id"])
     retention = None
     retention_error = None
-    if discard or collect:
+    if maintain_archive:
         # Reuse only proofs computed under this still-held archive lock. No
         # persisted/stat-only cache can turn corrupt bytes into verified data.
         verified = prior_verified | {tuple(entry) for entry in chunks}
         try:
-            retention = _prune_incremental(target.parent, discard=list(discard), verified=verified,
-                                           cache=cache, pack_proofs=pack_proofs)
+            retention = _prune_incremental(
+                target.parent, discard=list(discard), verified=verified,
+                cache=cache, pack_proofs=pack_proofs,
+                max_archive_bytes=max_archive_bytes, budget_candidates=budget_candidates,
+                published=target, run_id=evidence["state"]["run_id"],
+            )
         except (OSError, ValueError, KeyError, TypeError) as exc:
             # Publication is complete. Failed maintenance must be observable
             # without turning a valid new recovery point into a failed save.
@@ -946,13 +981,17 @@ def restore_incremental(descriptor: str | Path, destination: str | Path,
     started = time.perf_counter()
     archive = _archive(Path(descriptor))
     with process_lock(archive / ".lock"):
-        receipt = _restore_incremental(descriptor, destination, max_bytes=max_bytes)
+        receipt = materialize_incremental(descriptor, destination, max_bytes=max_bytes)
     receipt["seconds"] = time.perf_counter() - started
     return receipt
 
 
-def _restore_incremental(descriptor: str | Path, destination: str | Path,
-                         *, max_bytes: int = MAX_BYTES) -> dict:
+def materialize_incremental(descriptor: str | Path, destination: str | Path,
+                            *, max_bytes: int = MAX_BYTES) -> dict:
+    """Verify an independent copy without writing to the source archive.
+
+    Concurrent pruning can fail the read before the destination is published.
+    """
     started = time.perf_counter()
     root, chunks, archive, digest = read_incremental(descriptor)
     if type(max_bytes) is not int or max_bytes < 1 or root["size"] > max_bytes:
@@ -1012,14 +1051,20 @@ def prune_incremental(directory: str | Path, *, discard: list[Path]) -> dict:
 
 
 def _prune_incremental(parent: Path, *, discard: list[Path], verified=frozenset(), cache=None,
-                       pack_proofs=None) -> dict:
+                       pack_proofs=None, max_archive_bytes=0, budget_candidates=(),
+                       published=None, run_id=None) -> dict:
     archive = _archive(parent / "unused.icp.json")
     if any(archive.glob("*.rejected")):
         raise IncrementalCheckpointError("rejected checkpoint evidence requires operator review")
     requested = {Path(p).absolute() for p in discard}
-    if any(p.parent != parent or not p.name.endswith(".icp.json") for p in requested):
+    candidates = tuple(dict.fromkeys(Path(p).absolute() for p in budget_candidates))
+    if any(p.parent != parent or not p.name.endswith(".icp.json")
+           for p in requested.union(candidates)):
         raise IncrementalCheckpointError("invalid checkpoint retention path")
-    roots, packs, removed = set(), set(), []
+    budget_paths = set(candidates)
+    protected_objects = set()
+    candidate_objects = {}
+    removed = []
     checked = set(verified)
     cache = {} if cache is None else cache
     pack_proofs = set() if pack_proofs is None else pack_proofs
@@ -1029,42 +1074,71 @@ def _prune_incremental(parent: Path, *, discard: list[Path], verified=frozenset(
         _verify_objects(archive, chunks, root["size"], verified=checked, pack_proofs=pack_proofs)
         checked.update(tuple(e) for e in chunks)
         pin = Path(str(descriptor) + ".pin.json")
-        if descriptor in requested and not (pin.exists() or _linked(pin)):
+        pinned = pin.exists() or _linked(pin)
+        owned = run_id is None or root["evidence"]["state"]["run_id"] == run_id
+        if descriptor in requested and not pinned and owned:
             removed.append(descriptor)
             continue
-        roots.add(digest)
+        objects = {digest + ".root"}
+        objects.update(entry[1] + ".pack" for entry in chunks)
         if root.get("base"):
-            roots.add(root["base"])
+            objects.add(root["base"] + ".root")
             base = _root(archive, root["base"], cache)
             base_chunks, _ = _index(archive, base, cache)
             _verify_objects(archive, base_chunks, base["size"], verified=checked, pack_proofs=pack_proofs)
             checked.update(tuple(e) for e in base_chunks)
-            packs.update(entry[1] for entry in base_chunks)
+            objects.update(entry[1] + ".pack" for entry in base_chunks)
         if len(checked) > 2 * MAX_BYTES // CHUNK_SIZE:
             # Protected historical roots may be numerous. Eviction repeats
             # work rather than retaining full-history proof sets in memory.
             checked = set(verified)
-        packs.update(entry[1] for entry in chunks)
-    members = list(archive.iterdir())
-    for candidate in members:
-        if _linked(candidate):
+        if max_archive_bytes and descriptor in budget_paths and not pinned and owned:
+            candidate_objects[descriptor] = objects
+        else:
+            protected_objects.update(objects)
+    sizes = {}
+    archive_objects = set()
+    staging = set()
+    for member in archive.iterdir():
+        if _linked(member):
             raise IncrementalCheckpointError("linked archive member")
+        if member.is_file():
+            sizes[member.name] = member.stat().st_size
+            if member.name.startswith(".stage-"):
+                staging.add(member.name)
+            elif member.suffix in (".root", ".pack") and HEX.fullmatch(member.stem):
+                archive_objects.add(member.name)
+    if candidate_objects:
+        # Count shared bases and packs once, and reclaim their bytes only
+        # after the last unprotected reference has been dropped.
+        references = Counter(obj for objects in candidate_objects.values()
+                             for obj in objects if obj not in protected_objects)
+        live_bytes = sum(size for name, size in sizes.items()
+                         if name not in staging and
+                         (name not in archive_objects
+                          or name in protected_objects or name in references))
+        remaining = len(candidate_objects)
+        for descriptor in reversed(candidates):
+            if live_bytes <= max_archive_bytes or remaining <= 2:
+                break
+            if descriptor == published or descriptor not in candidate_objects:
+                continue
+            removed.append(descriptor)
+            remaining -= 1
+            for name in candidate_objects[descriptor]:
+                if name not in protected_objects:
+                    references[name] -= 1
+                    if references[name] == 0:
+                        live_bytes -= sizes[name]
+        protected_objects.update(name for name, count in references.items() if count)
     for descriptor in removed:
         descriptor.unlink()
     deleted_bytes = 0
     # No archive writer is active under this lock. Unpublished scratch is not
     # a recovery point; named immutable objects and uncertain roots stay safe.
-    for candidate in members:
-        if candidate.name.startswith(".stage-") and candidate.is_file():
-            deleted_bytes += candidate.stat().st_size
-            candidate.unlink()
-    for candidate in members:
-        suffix = candidate.suffix
-        digest = candidate.stem
-        if HEX.fullmatch(digest) and ((suffix == ".root" and digest not in roots)
-                                     or (suffix == ".pack" and digest not in packs)):
-            deleted_bytes += candidate.stat().st_size
-            candidate.unlink()
+    for name in staging | (archive_objects - protected_objects):
+        (archive / name).unlink()
+        deleted_bytes += sizes[name]
     _fsync_directory(archive)
     _fsync_directory(parent)
     return {"removed": [str(p) for p in removed], "deleted_bytes": deleted_bytes}
@@ -1077,7 +1151,7 @@ def pin_incremental(descriptor: str | Path, reason: str) -> Path:
     archive = _archive(path)
     with process_lock(archive / ".lock"):
         with tempfile.TemporaryDirectory(prefix=".manyworld-pin-", dir=path.parent) as directory:
-            receipt = _restore_incremental(path, Path(directory) / "verified.db")
+            receipt = materialize_incremental(path, Path(directory) / "verified.db")
         target = Path(str(path) + ".pin.json")
         _publish(target, {"version": 2, "root_sha256": receipt["root_sha256"],
                           "reason": reason, "state": receipt["evidence"]["state"]})

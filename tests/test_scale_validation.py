@@ -581,3 +581,72 @@ def test_incomplete_source_keeps_safe_evidence_without_starting_replay(
     assert "private-fixture-token" not in serialized
     assert str(tmp_path) not in serialized
     validate_receipt_safety(receipt)
+
+
+
+@pytest.mark.parametrize("interrupted_tick", [1, 2])
+def test_mid_tick_resource_pause_keeps_only_completed_samples(tmp_path, monkeypatch, interrupted_tick):
+    from llm.gateway import GatewayInterrupted
+    from world.loop import World
+
+    original_run = World.run
+
+    async def run_with_interruption(world, *args, **kwargs):
+        original_decide = world.runtime.decide_all
+
+        async def decide(tick):
+            if tick == interrupted_tick:
+                world.last_pause_reason = {"reason": "resource_guard", "breaches": ["system_swap"]}
+                world.request_pause()
+                raise GatewayInterrupted("fixture interruption in a provider phase")
+            return await original_decide(tick)
+
+        monkeypatch.setattr(world.runtime, "decide_all", decide)
+        await original_run(world, *args, **kwargs)
+
+    monkeypatch.setattr(World, "run", run_with_interruption)
+    output_dir = tmp_path / "output"
+    with pytest.raises(RuntimeError, match="source stopped before requested target"):
+        run_validation(REHEARSAL, ticks=2, label="interrupted", output_dir=output_dir,
+                       data_dir=tmp_path / "runs", approve_live=False)
+
+    [failure] = output_dir.glob("*.failure.json")
+    receipt = json.loads(failure.read_text())
+    assert receipt["source"]["status"] == "paused"
+    assert receipt["source"]["active_tick"] == interrupted_tick
+    assert receipt["source"]["phase"] == "MORNING"
+    assert [sample["tick"] for sample in receipt["runtime"]["ticks"]] == list(range(1, interrupted_tick))
+    assert receipt["replay"] == {"attempted": False, "proof": None}
+
+
+def test_raised_reconciliation_halt_keeps_sanitized_source_receipt(tmp_path, monkeypatch):
+    from engine.ledger import ReconciliationError
+    from world.loop import World
+
+    halt = ReconciliationError("private-fixture-reconciliation-detail")
+
+    def fail_reconciliation(world, tick):
+        raise halt
+
+    monkeypatch.setattr(World, "_phase_night_close", fail_reconciliation)
+    output_dir = tmp_path / "output"
+    with pytest.raises(ReconciliationError) as raised:
+        run_validation(REHEARSAL, ticks=2, label="halted", output_dir=output_dir,
+                       data_dir=tmp_path / "runs", approve_live=False)
+
+    assert raised.value is halt
+    [failure] = output_dir.glob("*.failure.json")
+    serialized = failure.read_text()
+    receipt = json.loads(serialized)
+    assert receipt["source"]["status"] == "halted"
+    assert receipt["source"]["tick"] == 0
+    assert receipt["source"]["active_tick"] == 1
+    assert receipt["source"]["phase"] == "NIGHT_CLOSE"
+    assert receipt["source"]["sha256"]
+    assert receipt["runtime"]["ticks"] == []
+    assert any(row["reason"] == "halt" for row in receipt["runtime"]["checkpoints"])
+    assert receipt["replay"] == {"attempted": False, "proof": None}
+    assert not list((tmp_path / "runs" / "replay").glob("*.db"))
+    assert "private-fixture-reconciliation-detail" not in serialized
+    assert str(tmp_path) not in serialized
+    validate_receipt_safety(receipt)

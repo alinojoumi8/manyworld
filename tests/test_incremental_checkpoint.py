@@ -136,6 +136,48 @@ def test_world_same_tick_and_storage_budget(world, tmp_path):
     assert not (tmp_path / 'too-large.db').exists()
 
 
+@pytest.mark.parametrize("has_previous", [False, True])
+def test_failed_descriptor_directory_sync_rolls_back_publication(
+    world, tmp_path, monkeypatch, has_previous,
+):
+    import engine.incremental_checkpoint as module
+
+    descriptor = tmp_path / "chunk-test_t0.icp.json"
+    if has_previous:
+        save_incremental(world.store.path, descriptor, catalog_tick=0)
+    before = descriptor.read_bytes() if has_previous else None
+    catalog = [dict(row) for row in world.store.query("SELECT * FROM checkpoints")]
+    world.store.execute("CREATE TABLE publication_probe(value)")
+    world.store.commit()
+    original_sync = module._fsync_directory
+    failed = False
+
+    def fail_after_replacement(path):
+        nonlocal failed
+        if path == tmp_path and not failed:
+            assert descriptor.read_bytes() != before
+            failed = True
+            raise OSError("descriptor directory sync failed")
+        original_sync(path)
+
+    monkeypatch.setattr(module, "_fsync_directory", fail_after_replacement)
+    with pytest.raises(OSError, match="descriptor directory sync failed"):
+        save_incremental(world.store.path, descriptor, catalog_tick=0)
+
+    if has_previous:
+        assert descriptor.read_bytes() == before
+        restored = tmp_path / "previous.db"
+        restore_incremental(descriptor, restored)
+        with sqlite3.connect(restored) as db:
+            assert db.execute(
+                "SELECT name FROM sqlite_master WHERE name='publication_probe'"
+            ).fetchone() is None
+    else:
+        assert not descriptor.exists()
+    assert [dict(row) for row in world.store.query("SELECT * FROM checkpoints")] == catalog
+    assert not list(tmp_path.glob(".descriptor-backup-*"))
+
+
 def test_v2_fork_materializes_verified_independent_db(world, tmp_path):
     from run import fork_run
     first = tmp_path / 'origin.icp.json'
@@ -198,6 +240,56 @@ def test_archive_budget_preserves_legacy_soft_retention_contract(world, tmp_path
     world.storage_policy = StoragePolicy(checkpoint_keep_last=2, checkpoint_max_bytes=1,
                                          min_free_bytes=0)
     assert world.checkpoint(0) is not None
+
+
+@pytest.mark.parametrize("fits_two", [False, True])
+def test_archive_budget_prunes_oldest_unpinned_points_to_the_floor(world, tmp_path, fits_two):
+    from engine.incremental_checkpoint import pin_incremental
+    from engine.storage_policy import StoragePolicy
+
+    directory = tmp_path / "checkpoints"
+    world.config.update(checkpoint_dir=str(directory), checkpoint_format="incremental-v2")
+    world.checkpoint_format = "incremental-v2"
+    world.storage_policy = StoragePolicy(checkpoint_keep_last=4, checkpoint_max_bytes=0,
+                                         min_free_bytes=0)
+    world.store.execute("CREATE TABLE retention_probe(value BLOB)")
+    world.store.execute("INSERT INTO retention_probe VALUES (zeroblob(256 * 1024))")
+    base = Path(world.checkpoint(0))
+    pin_incremental(base, "scientific control")
+    archive = directory / ".checkpoint-v2"
+    for tick in range(1, 5):
+        world.store.set_meta(tick=tick)
+        world.store.execute("UPDATE retention_probe SET value = randomblob(256 * 1024)")
+        assert world.checkpoint(tick)
+
+    def retained_size(ticks):
+        members = {".lock"}
+        for tick in (0, *ticks):
+            path = directory / f"chunk-test_t{tick}.icp.json"
+            _, chunks, _, root = read_incremental(path)
+            members.add(root + ".root")
+            members.update(entry[1] + ".pack" for entry in chunks)
+        return sum((archive / member).stat().st_size for member in members)
+
+    two_points = retained_size((3, 4))
+    three_points = retained_size((2, 3, 4))
+    assert three_points > two_points
+    cap = (two_points + three_points) // 2 if fits_two else 1
+    assert sum(path.stat().st_size for path in archive.iterdir()) > cap
+    world.storage_policy = StoragePolicy(checkpoint_keep_last=4, checkpoint_max_bytes=cap,
+                                         min_free_bytes=0)
+    assert world.checkpoint(4)
+
+    assert {path.name for path in directory.glob("*.icp.json")} == {
+        "chunk-test_t0.icp.json", "chunk-test_t3.icp.json", "chunk-test_t4.icp.json",
+    }
+    assert [row["tick"] for row in world.store.query("SELECT tick FROM checkpoints ORDER BY tick")] == [0, 3, 4]
+    for tick in (0, 3, 4):
+        evidence = restore_incremental(directory / f"chunk-test_t{tick}.icp.json",
+                                       tmp_path / f"retained-{tick}.db")
+        assert evidence["evidence"]["state"]["tick"] == tick
+    if fits_two:
+        assert sum(path.stat().st_size for path in archive.iterdir()) <= cap
 
 
 def test_reader_uses_explicit_private_disk_scratch(world, tmp_path):

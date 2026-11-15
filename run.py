@@ -890,8 +890,8 @@ def fork_run(spec: str, data_dir: Path = DATA_DIR, *, upgrade_semantics: int | N
     data_dir.mkdir(parents=True, exist_ok=True)
     dest = data_dir / f"{new_id}.db"
     if is_incremental(src):
-        from engine.incremental_checkpoint import restore_incremental
-        restore_incremental(src, dest)
+        from engine.incremental_checkpoint import materialize_incremental
+        materialize_incremental(src, dest)
     else:
         shutil.copyfile(src, dest)
     try:
