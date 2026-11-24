@@ -6,7 +6,7 @@
 .city-stage--district .civic-city__scene-status { display:block; margin-top:5px; font-size:12px; }
 .city-stage--district .civic-city--compact .civic-city__workfield { display:grid; grid-template-columns:minmax(0,1fr) 320px; height:auto; min-height:0; }
 .city-stage--district .civic-city--compact .civic-city__atlas { height:auto; min-height:0; overflow:visible; }
-.city-stage--district .civic-city--compact .civic-city__lens { position:static; inset:auto; width:auto; max-height:850px; border:0; border-left:1px solid var(--ae-border-soft); box-shadow:none; }
+.city-stage--district .civic-city--compact .civic-city__lens { position:static; inset:auto; width:auto; max-height:960px; border:0; border-left:1px solid var(--ae-border-soft); box-shadow:none; }
 .city-stage--district .civic-city__identity { padding:22px 18px; }
 .city-stage--district .civic-city__identity h3 { overflow-wrap:anywhere; }
 .city-stage--district .civic-city__facts dd { white-space:normal; overflow-wrap:anywhere; }
@@ -18,6 +18,9 @@
 .city-stage--district .civic-city--compact .civic-city__view-toggle button,
 .city-stage--district .civic-city--compact .civic-city__object-explorer select { min-height:44px; }
 .city-stage--district .city3d--embedded { border:0; border-radius:0; }
+.city-shell .city3d--embedded .city3d-playback select { color:var(--ae-text); background:var(--ae-surface-2); border-color:var(--ae-border-soft); }
+.city-shell .city3d--embedded .city3d-playback button:hover:not(:disabled) { color:var(--ae-text-hi); background:var(--ae-surface-3); border-color:var(--ae-border); }
+.city-shell .city3d--embedded .city3d-playback button[aria-pressed=true] { color:#fff; background:#2457d6; border-color:#173e9d; }
 .city-stage--district .city3d-layout { min-height:0; }
 .city-stage--district .city3d-field { display:flex; flex-direction:column; height:auto; min-height:0; }
 .city-stage--district .city3d--embedded .city3d-canvas { position:relative; inset:auto; height:480px; min-height:0; }

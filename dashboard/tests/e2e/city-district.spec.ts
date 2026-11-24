@@ -16,6 +16,9 @@ for(const width of [390,768,1440])test(`district at ${width}px keeps landmarks a
   if(width===1440){expect(field!.x+field!.width).toBeLessThanOrEqual(inspector!.x);expect(field!.width/width).toBeGreaterThan(.6);}
   else expect(inspector!.y).toBeGreaterThan(field!.y+field!.height);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  const speedBg=await page.getByLabel('Playback speed',{exact:true}).evaluate(node=>getComputedStyle(node).backgroundColor);
+  const restartBg=await page.getByRole('button',{name:'Restart day',exact:true}).evaluate(node=>getComputedStyle(node).backgroundColor);
+  expect(speedBg).toBe(restartBg);
   // Labels are real keyboard controls, remain bounded and do not collide.
   const labels=page.locator('.city3d-landmark');
   const boxes=await labels.evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height};}));
@@ -67,16 +70,23 @@ test('landmark keyboard selection preserves history, camera and evidence scope w
 });
 
 test('empty and forbidden city projections leave no selectable landmarks',async({page})=>{
-  await installCityFixture(page,{agents:0,places:0});
-  let forbidden=false;
-  await page.route('**/api/v2/world-map*',route=>route.fulfill(forbidden?{status:403,json:{detail:'This city is not available to this observer'}}:{json:{
-    run_id:'city-fixture',fork_id:null,tick:2,semantics_version:12,projection_version:2,policy_version:1,view_key:'public',snapshot_version:'s12-t2-e9-fixture',event_cursor:9,
-    projection:'world.map',data:{agents:[],places:[],organizations:[],banks:[],regions:[]},
-  }}));
+  await installCityFixture(page,{agents:24,places:12});
+  let mode:'empty'|'populated'|'forbidden'='empty';
+  await page.route('**/api/v2/world-map*',async route=>{
+    if(mode==='populated'){await route.fallback();return;}
+    await route.fulfill(mode==='forbidden'?{status:403,json:{detail:'This city is not available to this observer'}}:{json:{
+      run_id:'city-fixture',fork_id:null,tick:2,semantics_version:12,projection_version:2,policy_version:1,view_key:'public',snapshot_version:'s12-t2-e9-empty',event_cursor:9,
+      projection:'world.map',data:{agents:[],places:[],organizations:[],banks:[],regions:[]},
+    }});
+  });
   await page.goto('/runs/city-fixture/world?view=3d');
   await expect(page.getByText('No city entities are available in this projection.')).toBeVisible();
   await expect(page.locator('.city3d-landmark')).toHaveCount(0);
-  forbidden=true;await page.reload();
+  mode='populated';
+  await page.evaluate(()=>{history.pushState(null,'','?view=3d&tick=1');dispatchEvent(new PopStateEvent('popstate'));});
+  await expect(page.locator('.city3d-landmark').first()).toBeVisible();
+  await expect(page.getByTestId('city-canvas')).not.toHaveAttribute('data-camera3d','95,100,110,0,0,0,1');
+  mode='forbidden';await page.reload();
   await expect(page.getByRole('button',{name:'Use 2D atlas',exact:true})).toBeVisible();
   await expect(page.locator('.city3d-landmark')).toHaveCount(0);
   await expect(page.getByLabel('Keyboard explorer')).toBeDisabled();

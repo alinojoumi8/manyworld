@@ -255,7 +255,7 @@ export class CityScene {
     // Worlds without recorded places can legitimately have no scenery.
     for(const child of [...scenery.children])this.scenery.add(child);
     this.updateMarkers();
-    if(!this.initialCamera){
+    if(!this.initialCamera&&this.filtered.length){
       const bookmark=this.initiallyFramed?this.cameraState():null;
       this.initiallyFramed=true;
       if(this.projection.regions.length&&this.filtered.some(i=>i.provenance==='observed'))this.focusRegion(this.projection.regions[0].id);else this.fitVisible();

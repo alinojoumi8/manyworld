@@ -87,7 +87,7 @@ each audience can find the authoritative level of detail.
 
 - [StarNet-inspired UI redesign proposal](plans/2026-10-28-starnet-ui-redesign.md) —
   source comparison, original interactive city direction, integration phases and
-  acceptance criteria; proposed, not implemented.
+  acceptance criteria; opt-in 3D district, articulated citizens and road walking implemented.
 - [Product requirements](../PRD.md)
 - [Delivery tasks](../TASKS.md)
 - [Implementation status](implementation-status.md) — the single maintained
