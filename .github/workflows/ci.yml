@@ -570,7 +570,9 @@ jobs:
           world-os-routes.spec.ts
           live-city-context.spec.ts
           city-unified.spec.ts
+          city-district.spec.ts
           city-viewport.spec.ts
+          city-walking.spec.ts
         working-directory: dashboard
       - name: Preserve failed browser diagnostics
         if: failure()
